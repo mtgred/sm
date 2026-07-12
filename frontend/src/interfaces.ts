@@ -27,6 +27,30 @@ export interface EmitFn {
 
 export type Card = {
   id: string
+  type: string
+  cost: number | null
+  attack: number | null
+  health: number | null
+  rarity: string
+  faction: string
+  specialization: string
+  attributes: string
+  text: string
+  hp: string
+  "shield-capacity": number | null
+  "shield-power": number | null
+  "resource-count": string
+  "core-energy": string
+  "mercenary-limit": string
+  "conversion-rate": string
+  "faction-subtypes": string
+}
+
+export type Printing = {
+  id: string
+  name: string
+  set: string
+  image?: string
 }
 
 export interface ChooseOption {
