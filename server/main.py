@@ -1,27 +1,28 @@
 from datetime import datetime
+from typing import Literal
 from uuid import uuid4
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from .auth import Session, current_user
+from pydantic import BaseModel, model_validator
 from .db import db
 from .models import Card, DeckBase, ValidationIssue
 from .rules import rules_manifest
 from .studio import load_cards
 from .validation import validate_deck
 
+# Platform-internal server: the browser never calls it directly. Every request
+# arrives through fireball (POST /api/query or the socket layer), which
+# verifies the JWT and forwards the authenticated username as a query param —
+# so this server does no token verification of its own and must only be
+# reachable from localhost.
 app = FastAPI(title="Soulmasters API")
 
-# The deckbuilder frontend is served by the fireball platform on another
-# origin; auth uses bearer tokens (no cookies), so a wildcard is safe.
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 DECK_PROJECTION = {"_id": 0}
+
+def current_username(username: str = "") -> str:
+    if not username:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return username
 
 def find_deck(id: str) -> dict:
     deck = db.decks.find_one({"id": id}, DECK_PROJECTION)
@@ -30,8 +31,8 @@ def find_deck(id: str) -> dict:
     return deck
 
 
-def require_owner(deck: dict, user: Session):
-    if deck["owner"] != user.username:
+def require_owner(deck: dict, username: str):
+    if deck["owner"] != username:
         raise HTTPException(status_code=403, detail="You don't own this deck")
 
 
@@ -69,33 +70,190 @@ async def post_validate(body: DeckBase) -> list[ValidationIssue]:
 
 
 @app.get("/decks")
-async def get_decks(user: Session = Depends(current_user)):
-    return db.decks.find({"owner": user.username}, DECK_PROJECTION).to_list()
+async def get_decks(username: str = Depends(current_username)):
+    return db.decks.find({"owner": username}, DECK_PROJECTION).to_list()
 
 
 @app.post("/decks")
-async def post_decks(body: DeckBase, user: Session = Depends(current_user)):
-    deck = build_deck_doc(body, owner=user.username)
+async def post_decks(body: DeckBase, username: str = Depends(current_username)):
+    deck = build_deck_doc(body, owner=username)
     db.decks.insert_one({**deck})
     return deck
 
 
 @app.put("/decks/{id}")
-async def put_deck(id: str, body: DeckBase, user: Session = Depends(current_user)):
+async def put_deck(id: str, body: DeckBase, username: str = Depends(current_username)):
     existing = find_deck(id)
-    require_owner(existing, user)
-    deck = build_deck_doc(body, owner=user.username, existing=existing)
+    require_owner(existing, username)
+    deck = build_deck_doc(body, owner=username, existing=existing)
     db.decks.replace_one({"id": id}, {**deck})
     return deck
 
 
 @app.delete("/decks/{id}")
-async def delete_deck(id: str, user: Session = Depends(current_user)):
+async def delete_deck(id: str, username: str = Depends(current_username)):
     deck = find_deck(id)
-    require_owner(deck, user)
+    require_owner(deck, username)
     db.decks.delete_one({"id": id})
     return {"deleted": id}
 
 
+# -- Game lobby ---------------------------------------------------------------
+#
+# Spoken over fireball's socket layer (fireball/server/src/socketIO.ts): the
+# platform verifies the JWT, injects `player` into the request body, POSTs it
+# here, and broadcasts whatever game list we return to everyone in the
+# `soulmasters/lobby` channel. So `player` is trusted platform identity, and
+# every action responds with the full (state-less) game list.
+
+GAME_SIZE = 2  # Soulmasters is a two-player duel
+
+class GameSettings(BaseModel):
+    casual: bool = False
+
+
+class LobbyRequest(BaseModel):
+    id: str = ""
+    action: Literal["create", "join", "leave", "start", "deck"]
+    player: dict[str, str]
+    settings: GameSettings | None = None
+    deck_id: str | None = None
+
+    @model_validator(mode="after")
+    def validate_fields(self):
+        if self.action != "create" and not self.id:
+            raise ValueError("Game ID is required")
+        if self.action == "create" and self.settings is None:
+            raise ValueError("Settings are required to create a game")
+        if self.action == "deck" and not self.deck_id:
+            raise ValueError("A deck ID is required to select a deck")
+        return self
+
+
+# The stored `state` is only for the running game; the lobby list never
+# carries it.
+GAMES_PROJECTION = {"_id": 0, "state": 0}
+
+def list_games() -> list[dict]:
+    return db.games.find({}, GAMES_PROJECTION).to_list()
+
+
+def find_game(id: str) -> dict:
+    game = db.games.find_one({"id": id}, {"_id": 0})
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
+    return game
+
+
+def require_not_started(game: dict):
+    if game.get("started_at"):
+        raise HTTPException(status_code=422, detail="Game has already started")
+
+
+def lobby_player(player: dict) -> dict:
+    return {
+        "username": player.get("username"),
+        "hash": player.get("hash"),
+        "deck_id": None,
+        "deck_name": None,
+        "commander_id": None,
+        "deck_valid": None,
+    }
+
+
+def player_deck(game: dict, player: dict) -> dict:
+    """The deck a player brings to this game, re-checked at use time (it may
+    have been edited or deleted since it was selected in the lobby). An illegal
+    deck is allowed through — the lobby flags it and the players decide."""
+    deck = db.decks.find_one({"id": player["deck_id"]}, DECK_PROJECTION)
+    if not deck or deck["owner"] != player["username"]:
+        raise HTTPException(status_code=404, detail="Deck not found")
+    if deck["casual"] != game["settings"]["casual"]:
+        detail = "casual" if game["settings"]["casual"] else "competitive"
+        raise HTTPException(status_code=422, detail=f"{deck['name']} is not a {detail} deck")
+    return deck
+
+
+def initial_state(game: dict) -> dict:
+    """Placeholder game state: players with their decks snapshotted at start,
+    so editing a deck never touches a running game."""
+    return {
+        "log": [],
+        "players": [
+            {
+                "user": {"username": p["username"], "hash": p["hash"]},
+                "deck": player_deck(game, p),
+            }
+            for p in game["players"]
+        ],
+    }
+
+
+@app.get("/games")
+async def get_games():
+    return list_games()
+
+
+@app.get("/game/{id}")
+async def get_game(id: str):
+    return find_game(id)
+
+
+@app.post("/games")
+async def post_games(req: LobbyRequest):
+    match req.action:
+        case "create":
+            db.games.insert_one({
+                "id": str(uuid4()),
+                "created_at": datetime.now(),
+                "players": [lobby_player(req.player)],
+                "settings": req.settings.model_dump(),
+            })
+        case "join":
+            game = find_game(req.id)
+            require_not_started(game)
+            if any(p["username"] == req.player["username"] for p in game["players"]):
+                raise HTTPException(status_code=422, detail="You have already joined this game")
+            if len(game["players"]) >= GAME_SIZE:
+                raise HTTPException(status_code=422, detail="Game is full")
+            players = game["players"] + [lobby_player(req.player)]
+            db.games.update_one({"id": req.id}, {"$set": {"players": players}})
+        case "leave":
+            game = find_game(req.id)
+            require_not_started(game)
+            players = [p for p in game["players"] if p["username"] != req.player["username"]]
+            if len(players) != len(game["players"]):
+                if players:
+                    db.games.update_one({"id": req.id}, {"$set": {"players": players}})
+                else:
+                    db.games.delete_one({"id": req.id})
+        case "deck":
+            game = find_game(req.id)
+            require_not_started(game)
+            if not any(p["username"] == req.player["username"] for p in game["players"]):
+                raise HTTPException(status_code=422, detail="You are not in this game")
+            deck = player_deck(game, {**req.player, "deck_id": req.deck_id})
+            players = [
+                {**p, "deck_id": deck["id"], "deck_name": deck["name"],
+                 "commander_id": deck["commander_id"], "deck_valid": deck["is_valid"]}
+                if p["username"] == req.player["username"] else p
+                for p in game["players"]
+            ]
+            db.games.update_one({"id": req.id}, {"$set": {"players": players}})
+        case "start":
+            game = find_game(req.id)
+            require_not_started(game)
+            if len(game["players"]) < GAME_SIZE:
+                raise HTTPException(status_code=422, detail=f"{GAME_SIZE} players are required")
+            if any(not p.get("deck_id") for p in game["players"]):
+                raise HTTPException(status_code=422, detail="Every player must select a deck")
+            db.games.update_one({"id": req.id}, {
+                "$set": {"state": initial_state(game), "started_at": datetime.now()},
+            })
+    return list_games()
+
+
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=4005)
+    # Localhost only: auth is fireball's username query param, so exposing
+    # this port beyond the host would let anyone act as any user.
+    uvicorn.run(app, host="127.0.0.1", port=4005)

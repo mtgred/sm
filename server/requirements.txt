@@ -2,6 +2,6 @@ fastapi
 uvicorn[standard]
 pydantic
 pymongo
-PyJWT
 pytest
+httpx
 ruff

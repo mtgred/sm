@@ -6,19 +6,14 @@ import React, { useEffect, useMemo, useRef, useState } from "react"
 // middle, and an edit panel (name / commander / typeahead / parsed textarea)
 // that slides in from the right while editing.
 //
-// Talks to the standalone API (server/main.py, port 4005); override the base
-// URL by setting window.SM_API_URL before this module loads. The server stays
-// authoritative on rules via POST /decks/validate; the local checks only
-// color lines and cap typeahead quantities.
+// All API traffic tunnels through Manaring's POST /api/query, which verifies
+// the bearer token and forwards the request (with the username) to the
+// soulmasters server (server/main.py) — the browser never talks to that
+// server directly. It stays authoritative on rules via POST decks/validate;
+// the local checks only color lines and cap typeahead quantities.
 // ---------------------------------------------------------------------------
 
-declare global {
-  interface Window {
-    SM_API_URL?: string
-  }
-}
-
-const API_BASE = window.SM_API_URL ?? "http://localhost:4005"
+const RING_ID = "soulmasters"
 
 // -- API types (mirror of server/models.py serialization)
 type CardType = "Commander" | "Unit" | "Spell" | "Ability" | "Core" | "Reserve" | "Token"
@@ -308,11 +303,21 @@ const lineIssue = (
   return null
 }
 
-// API client
-const request = async <T,>(path: string, token?: string | null, init?: RequestInit): Promise<T> => {
+// API client: every call is a same-origin POST /api/query that Manaring
+// authenticates and relays to the ring server, mirroring its status and body.
+const request = async <T,>(
+  path: string,
+  token?: string | null,
+  method: string = "get",
+  data?: object,
+): Promise<T> => {
   const headers: Record<string, string> = { "Content-Type": "application/json" }
   if (token) headers.Authorization = `Bearer ${token}`
-  const res = await fetch(`${API_BASE}${path}`, { ...init, headers })
+  const res = await fetch("/api/query", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ method, ringId: RING_ID, path, data }),
+  })
   if (!res.ok) {
     const detail = await res.json().then(body => body.detail).catch(() => null)
     throw new Error(typeof detail === "string" ? detail : `Request failed (${res.status})`)
@@ -929,7 +934,7 @@ const DeckBuilder: React.FC<DeckBuilderProps> = ({ token }) => {
 
   useEffect(() => {
     setLoadStatus("loading")
-    Promise.all([request<Rules>("/rules"), request<ApiCard[]>("/cards")])
+    Promise.all([request<Rules>("rules"), request<ApiCard[]>("cards")])
       .then(([rulesData, cardData]) => {
         setRules(rulesData)
         setCards(cardData)
@@ -943,7 +948,7 @@ const DeckBuilder: React.FC<DeckBuilderProps> = ({ token }) => {
       setDecksStatus("ready")
       return
     }
-    request<SavedDeck[]>("/decks", token)
+    request<SavedDeck[]>("decks", token)
       .then(list => {
         setDecks(list)
         setDecksStatus("ready")
@@ -960,7 +965,7 @@ const DeckBuilder: React.FC<DeckBuilderProps> = ({ token }) => {
     if (!payloadJson) return
     let stale = false
     const timer = setTimeout(() => {
-      request<ValidationIssue[]>("/decks/validate", token, { method: "POST", body: payloadJson })
+      request<ValidationIssue[]>("decks/validate", token, "post", JSON.parse(payloadJson))
         .then(issues => !stale && setLiveIssues(issues))
         .catch(() => {})
     }, 400)
@@ -1050,10 +1055,10 @@ const DeckBuilder: React.FC<DeckBuilderProps> = ({ token }) => {
     setSaving(true)
     setNotice(null)
     try {
-      const body = JSON.stringify(draftPayload(draft))
+      const payload = draftPayload(draft)
       const saved = draft.id
-        ? await request<SavedDeck>(`/decks/${draft.id}`, token, { method: "PUT", body })
-        : await request<SavedDeck>("/decks", token, { method: "POST", body })
+        ? await request<SavedDeck>(`decks/${draft.id}`, token, "put", payload)
+        : await request<SavedDeck>("decks", token, "post", payload)
       loadDecks(saved)
       setMode("view")
       setDraft(null)
@@ -1068,7 +1073,7 @@ const DeckBuilder: React.FC<DeckBuilderProps> = ({ token }) => {
   const onConfirmDelete = async () => {
     if (!selected) return
     try {
-      await request(`/decks/${selected.id}`, token, { method: "DELETE" })
+      await request(`decks/${selected.id}`, token, "delete")
       setMode("view")
       loadDecks(null)
     } catch (err) {

@@ -8,10 +8,24 @@ export interface Session {
   user: User
 }
 
+export interface GameSettings {
+  casual: boolean
+}
+
+// A seat in a lobby game; deck fields stay null until the player picks one
+export interface LobbyPlayer extends User {
+  deck_id: string | null
+  deck_name: string | null
+  commander_id: string | null
+  deck_valid: boolean | null
+}
+
 export interface Game {
   id: string
-  name: string
-  players: User[]
+  players: LobbyPlayer[]
+  settings: GameSettings
+  created_at: string
+  started_at?: string
 }
 
 export interface EmitData {
