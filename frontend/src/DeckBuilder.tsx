@@ -430,9 +430,7 @@ const ZoomCard: React.FC<{ card: ApiCard; x: number; y: number }> = ({ card, x, 
 }
 
 // Left panel: deck collection
-const DeckThumb: React.FC<{ commander: ApiCard | undefined; fallback: string }> = (
-  { commander, fallback },
-) => {
+const DeckThumb: React.FC<{ commander: ApiCard | undefined; fallback: string }> = ({ commander, fallback } ) => {
   const image = imagePath(commander)
   if (image) {
     return <img className="w-12 h-12 shrink-0 rounded object-cover object-top" src={image} alt="" />
@@ -600,16 +598,16 @@ const DecklistPanel: React.FC<DecklistPanelProps> = ({
           return (
             <div key={lineKey(line)} className="flex items-center gap-1.5 leading-6">
               {editing && (
-                <span className="flex gap-0.5">
+                <span className="flex gap-1">
                   <button
-                    className="w-5 h-5 flex items-center justify-center rounded border bg-navy-900/80 cursor-pointer hover:bg-sky-900/50"
+                    className="w-5 h-5 flex items-center justify-center rounded border cursor-pointer"
                     aria-label={`Remove one ${line.name}`}
                     onClick={() => onBump(zone, lineKey(line), -1)}
                   >
                     −
                   </button>
                   <button
-                    className="w-5 h-5 flex items-center justify-center rounded border bg-navy-900/80 cursor-pointer hover:bg-sky-900/50"
+                    className="w-5 h-5 flex items-center justify-center rounded border cursor-pointer"
                     aria-label={`Add one ${line.name}`}
                     onClick={() => onBump(zone, lineKey(line), 1)}
                   >

@@ -23,11 +23,6 @@ interface DeckSummary {
   is_valid: boolean
 }
 
-const BTN_DANGER =
-  "px-3 py-0.5 rounded border border-red-950/80 bg-gradient-to-b from-red-700 to-red-900 " +
-  "text-white shadow-sm whitespace-nowrap enabled:cursor-pointer " +
-  "enabled:hover:from-red-600 enabled:hover:to-red-800 disabled:opacity-40"
-
 const formatLabel = (casual: boolean) => (casual ? "Casual" : "Competitive")
 
 const PlayerRow: React.FC<{ player: LobbyPlayer }> = ({ player }) => (
@@ -187,7 +182,7 @@ const Lobby: React.FC<LobbyProps> = ({ games, session, emit }) => {
                 <button onClick={() => window.location.assign(`/${RING_ID}/game/${joinedGame.id}`)}>
                   Return to game
                 </button>
-                <button className={BTN_DANGER} onClick={() => send({ action: "leave", id: joinedGame.id })}>
+                <button onClick={() => send({ action: "leave", id: joinedGame.id })}>
                   Leave
                 </button>
               </div>
