@@ -67,39 +67,36 @@ export type Printing = {
   image?: string
 }
 
-export interface ChooseOption {
-  label: string
-  cost?: Record<string, number>
+// A physical card in the game state: `id` names the card in the pool, `uid`
+// identifies this copy
+export interface BoardCard {
+  id: string
+  uid: string
 }
 
-export interface Prompt {
-  type: string
-  choices?: string[] | ChooseOption[]
-  count?: number
-  amount?: number
-  effects?: Record<string, unknown>
-  options?: string[]
-  min?: number
-  max?: number
-  spaces?: string[]
-  factions?: string[]
-  faction?: string
-  deepCover?: boolean
-  posts?: string[]
-  space?: string
-  maxCommanders?: number
-  maxTotal?: number
-  factionBonus?: Record<string, unknown>
-  passive?: boolean
-  contracts?: string[]
+export interface CommanderState {
+  stages: string[] // card ids in evolution order (Base first)
+  stage: number // index into stages
 }
 
-export interface Player {
+export interface PlayerState {
   user: User
-  hand: Card[]
-  deck: Card[]
-  discard: Card[]
-  commander: Card
+  commander: CommanderState
+  hp: number
+  maxHp: number
+  resource: string // the faction's resource name, e.g. "Rage"
+  resourceDeck: number
+  resourceField: number
+  deck: BoardCard[]
+  hand: BoardCard[]
+  discard: BoardCard[]
+  battleground: BoardCard[]
+  equipment: BoardCard[]
+  battlefield: BoardCard | null
+  energyField: BoardCard[]
+  reserve: BoardCard[]
+  mulliganed: boolean
+  prompts: unknown[]
 }
 
 export interface ChatMessage {
@@ -108,6 +105,10 @@ export interface ChatMessage {
 }
 
 export interface GameState {
+  round: number
+  phase: string
+  firstPlayer: number
+  activePlayer: number | null
   log: ChatMessage[]
-  players: Player[]
+  players: PlayerState[]
 }

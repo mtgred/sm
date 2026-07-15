@@ -30,6 +30,22 @@ RESERVE_SLOTS_CASUAL = {"Weapon": 1, "Armor": 1, "Battlefield": 1, "Feat": 2}
 # Designations any commander's deck may include regardless of faction.
 OPEN_DESIGNATIONS = ["Universal", "Mercenary", "Celestial"]
 
+# Each faction generates its own resource type; the resource deck is
+# Resource Count copies of it. (Druidian's Rune is from the card texts —
+# the learn-to-play rulebook only tables the other five.)
+FACTION_RESOURCES = {
+    "Draconian": "Scales",
+    "Druidian": "Rune",
+    "Necromancer": "Crux",
+    "Valkyrian": "Focus",
+    "Vampyrian": "Bleed",
+    "Wolven": "Rage",
+}
+
+# Game setup / turn structure
+OPENING_HAND_SIZE = 5  # drawn at setup, then one optional mulligan
+TURN_DRAW = 2  # cards drawn in each turn's Draw phase
+
 
 def rules_manifest() -> dict:
     """JSON-safe bundle of every rule constant, for the frontend mirror."""
@@ -42,4 +58,7 @@ def rules_manifest() -> dict:
         "reserveSlots": RESERVE_SLOTS,
         "reserveSlotsCasual": RESERVE_SLOTS_CASUAL,
         "openDesignations": OPEN_DESIGNATIONS,
+        "factionResources": FACTION_RESOURCES,
+        "openingHandSize": OPENING_HAND_SIZE,
+        "turnDraw": TURN_DRAW,
     }

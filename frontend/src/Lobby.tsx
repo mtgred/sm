@@ -11,7 +11,6 @@ import type { EmitFn, Game, LobbyPlayer, Session } from "./interfaces"
 
 const RING_ID = "soulmasters"
 const GAME_SIZE = 2
-
 const STAGE_SUFFIX = /\s*\((Base|Evol\. 1|Evol\. 2)\)$/
 const commanderName = (id: string | null) => id?.replace(STAGE_SUFFIX, "") ?? null
 
@@ -31,24 +30,19 @@ const BTN_DANGER =
 
 const formatLabel = (casual: boolean) => (casual ? "Casual" : "Competitive")
 
-const IllegalBadge = () => (
-  <span className="bg-red-900 text-red-100 px-2 rounded whitespace-nowrap">Illegal</span>
-)
-
 const PlayerRow: React.FC<{ player: LobbyPlayer }> = ({ player }) => (
   <div className="flex items-center gap-3 mb-3">
     <UserView user={player} />
-    {player.deck_name ? (
+    {player.deck_name ?
       <>
         <span className="text-gray-300 truncate">
           {player.deck_name}
           {commanderName(player.commander_id) && ` — ${commanderName(player.commander_id)}`}
         </span>
-        {player.deck_valid === false && <IllegalBadge />}
+        {player.deck_valid === false &&
+          <span className="bg-red-900 text-red-100 px-2 rounded whitespace-nowrap">Not legal</span>}
       </>
-    ) : (
-      <span className="text-gray-400 italic">Choosing a deck…</span>
-    )}
+     : <span className="text-gray-400 italic">Choosing a deck…</span>}
   </div>
 )
 
@@ -64,14 +58,11 @@ const Lobby: React.FC<LobbyProps> = ({ games, session, emit }) => {
   const [decks, setDecks] = useState<DeckSummary[]>([])
   const [decksStatus, setDecksStatus] = useState<"loading" | "error" | "ready">("loading")
 
-  const send = (data: object) => {
-    emit("lobby", { method: "post", ringId: RING_ID, path: "games", data })
-  }
+  const send = (data: object) => emit("lobby", { method: "post", ringId: RING_ID, path: "games", data })
 
   // On a rejected action (e.g. two players race for the last seat) fireball
   // broadcasts the error body instead of a game list; keep the last good list.
   const gameList = Array.isArray(games) ? games : []
-
   const username = session?.user?.username
   const joinedGame = username
     ? gameList.find(game => game.players.some(player => player.username === username)) ?? null
@@ -93,10 +84,7 @@ const Lobby: React.FC<LobbyProps> = ({ games, session, emit }) => {
     setDecksStatus("loading")
     fetch("/api/query", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${session.token}`,
-      },
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.token}` },
       body: JSON.stringify({ method: "get", ringId: RING_ID, path: "decks" }),
     })
       .then(res => (res.ok ? res.json() : Promise.reject(new Error(`${res.status}`))))
@@ -109,9 +97,7 @@ const Lobby: React.FC<LobbyProps> = ({ games, session, emit }) => {
 
   // Illegal decks are offered too (flagged both here and in the player list) —
   // only the format has to match, which is what the server enforces.
-  const formatDecks = joinedGame
-    ? decks.filter(deck => deck.casual === joinedGame.settings.casual)
-    : []
+  const formatDecks = joinedGame ? decks.filter(deck => deck.casual === joinedGame.settings.casual) : []
 
   const canStart =
     joinedGame != null &&
@@ -133,9 +119,8 @@ const Lobby: React.FC<LobbyProps> = ({ games, session, emit }) => {
             </div>
 
             <div className="grow overflow-auto px-4 py-0.5">
-              {gameList.length === 0 && (
-                <div className="text-gray-400 p-3">No games yet — create one.</div>
-              )}
+              {gameList.length === 0 &&
+                <div className="text-gray-400 p-3">No games yet — create one.</div>}
               {gameList.map(game => (
                 <div
                   key={game.id}
@@ -156,17 +141,16 @@ const Lobby: React.FC<LobbyProps> = ({ games, session, emit }) => {
                     </div>
                   </div>
 
-                  {session && !joinedGame && !game.started_at && game.players.length < GAME_SIZE && (
+                  {session && !joinedGame && !game.started_at && game.players.length < GAME_SIZE &&
                     <button onClick={() => send({ action: "join", id: game.id })}>
                       Join
-                    </button>
-                  )}
+                    </button>}
                 </div>
               ))}
             </div>
           </div>
 
-          {creating && !joinedGame && (
+          {creating && !joinedGame &&
             <div className="p-4">
               <h2 className="text-2xl font-bold mb-6">New Game</h2>
               <label className="flex items-center cursor-pointer gap-2">
@@ -189,10 +173,28 @@ const Lobby: React.FC<LobbyProps> = ({ games, session, emit }) => {
                 </button>
                 <button onClick={() => setCreating(false)}>Cancel</button>
               </div>
-            </div>
-          )}
+            </div>}
 
-          {joinedGame && (
+          {joinedGame && joinedGame.started_at &&
+            // The live path is fireball's `start` broadcast, which navigates
+            // everyone in the game channel; this covers coming back to the
+            // lobby (e.g. a reload) while the game is still running.
+            <div className="p-4 grow min-w-0">
+              <h2 className="text-2xl mb-4 font-bold">
+                {formatLabel(joinedGame.settings.casual)} game in progress
+              </h2>
+              <div className="flex items-center gap-3">
+                <button onClick={() => window.location.assign(`/${RING_ID}/game/${joinedGame.id}`)}>
+                  Return to game
+                </button>
+                <button className={BTN_DANGER} onClick={() => send({ action: "leave", id: joinedGame.id })}>
+                  Leave
+                </button>
+              </div>
+              <div className="text-gray-400 mt-3">Leaving a game in progress quits it for good.</div>
+            </div>}
+
+          {joinedGame && !joinedGame.started_at && (
             <div className="p-4 grow min-w-0">
               <div className="flex items-center gap-3 mb-4">
                 <button
@@ -202,7 +204,7 @@ const Lobby: React.FC<LobbyProps> = ({ games, session, emit }) => {
                 >
                   Start
                 </button>
-                <button className={BTN_DANGER} onClick={() => send({ action: "leave", id: joinedGame.id })}>
+                <button onClick={() => send({ action: "leave", id: joinedGame.id })}>
                   Leave
                 </button>
               </div>
@@ -210,26 +212,21 @@ const Lobby: React.FC<LobbyProps> = ({ games, session, emit }) => {
               <h2 className="text-2xl mb-4 font-bold">{formatLabel(joinedGame.settings.casual)} game</h2>
 
               <h3 className="mb-2 text-lg font-semibold">Players</h3>
-              {joinedGame.players.map(player => (
-                <PlayerRow key={player.username} player={player} />
-              ))}
-              {joinedGame.players.length < GAME_SIZE && (
-                <div className="text-gray-400 italic mb-3">Waiting for an opponent…</div>
-              )}
+              {joinedGame.players.map(player => <PlayerRow key={player.username} player={player} />)}
+              {joinedGame.players.length < GAME_SIZE &&
+                <div className="text-gray-400 italic mb-3">Waiting for an opponent…</div>}
 
               <h3 className="mt-6 mb-2 text-lg font-semibold">Your deck</h3>
               {decksStatus === "loading" && <div>Loading your decks…</div>}
-              {decksStatus === "error" && (
+              {decksStatus === "error" &&
                 <div className="text-red-400">
                   Couldn't load your decks. Check that the deckbuilder server is running, then reload.
-                </div>
-              )}
-              {decksStatus === "ready" && formatDecks.length === 0 && (
+                </div>}
+              {decksStatus === "ready" && formatDecks.length === 0 &&
                 <div className="text-gray-400">
                   No {formatLabel(joinedGame.settings.casual).toLowerCase()} decks —
                   build one in the deck builder first.
-                </div>
-              )}
+                </div>}
               {decksStatus === "ready" && formatDecks.length > 0 && (
                 <>
                   <select
@@ -246,12 +243,6 @@ const Lobby: React.FC<LobbyProps> = ({ games, session, emit }) => {
                       </option>
                     ))}
                   </select>
-                  {me?.deck_valid === false && (
-                    <div className="text-gray-400 mt-2">
-                      This deck doesn't follow the deck-building rules. You can still play it — fix it
-                      in the deck builder if that wasn't intended.
-                    </div>
-                  )}
                 </>
               )}
             </div>

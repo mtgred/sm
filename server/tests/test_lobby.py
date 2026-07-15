@@ -74,13 +74,22 @@ BOB = {"username": "bob", "hash": "b2"}
 
 
 def deck_doc(id: str, owner: str, casual: bool = False, is_valid: bool = True) -> dict:
+    # A legal Keshi Savageclaw deck against the conftest pool, so "start"
+    # can expand it into a real game state.
     return {
         "id": id,
         "owner": owner,
         "name": f"{owner}'s {id}",
         "commander_id": "Keshi Savageclaw (Base)",
-        "main_deck": [],
-        "reserve_deck": [],
+        "main_deck": [
+            {"card_id": "Common Unit", "count": 25},
+            {"card_id": "Common Spell", "count": 19},
+            {"card_id": "Energy Core", "count": 6},
+        ],
+        "reserve_deck": [
+            "Weapon One", "Weapon Two", "Armor One", "Armor Two",
+            "Battlefield One", "Battlefield Two", "Feat One", "Feat Two",
+        ],
         "casual": casual,
         "is_valid": is_valid,
         "issues": [],
@@ -88,9 +97,10 @@ def deck_doc(id: str, owner: str, casual: bool = False, is_valid: bool = True) -
 
 
 @pytest.fixture
-def fake_db(monkeypatch) -> FakeDb:
+def fake_db(monkeypatch, pool) -> FakeDb:
     fake = FakeDb()
     monkeypatch.setattr(main, "db", fake)
+    monkeypatch.setattr(main, "load_cards", lambda: pool)
     return fake
 
 
@@ -216,14 +226,34 @@ def test_start_snapshots_decks_into_state(client, fake_db):
     assert post(client, "start", ALICE, id=game["id"]).status_code == 200
     stored = fake_db.games.find_one({"id": game["id"]})
     assert stored["started_at"]
-    assert [p["user"]["username"] for p in stored["state"]["players"]] == ["alice", "bob"]
-    assert stored["state"]["players"][0]["deck"]["id"] == "da"
+    state = stored["state"]
+    assert state["phase"] == "mulligan"
+    # seat order is randomized at setup
+    assert {p["user"]["username"] for p in state["players"]} == {"alice", "bob"}
+    alice = next(p for p in state["players"] if p["user"]["username"] == "alice")
+    assert len(alice["hand"]) == 5 and len(alice["deck"]) == 45
     # the game list never carries the state payload
     listed = client.get("/games").json()[0]
     assert "state" not in listed
-    # and a started game can't be joined, left, or restarted
-    for action, player in [("join", {"username": "eve", "hash": "e5"}), ("leave", ALICE), ("start", ALICE)]:
+    # and a started game can't be joined or restarted
+    for action, player in [("join", {"username": "eve", "hash": "e5"}), ("start", ALICE)]:
         assert post(client, action, player, id=game["id"]).status_code == 422
+
+
+def test_leave_started_game_quits_it(client, fake_db):
+    game = start_ready_game(client, fake_db)
+    post(client, "start", ALICE, id=game["id"])
+
+    resp = post(client, "leave", ALICE, id=game["id"])
+    assert resp.status_code == 200
+    assert [p["username"] for p in resp.json()[0]["players"]] == ["bob"]
+    # bob is still at the table, and sees why alice's seat went quiet
+    stored = fake_db.games.find_one({"id": game["id"]})
+    assert {p["user"]["username"] for p in stored["state"]["players"]} == {"alice", "bob"}
+    assert {"msg": "left the game", "user": ALICE} in stored["state"]["log"]
+
+    # once the last player leaves, the game (and its state) is gone
+    assert post(client, "leave", BOB, id=game["id"]).json() == []
 
 
 def test_start_recheck_rejects_deleted_deck(client, fake_db):
@@ -237,8 +267,15 @@ def test_start_allows_deck_edited_illegal(client, fake_db):
     game = start_ready_game(client, fake_db)
     fake_db.decks.update_one({"id": "db"}, {"$set": {"is_valid": False}})
     assert post(client, "start", ALICE, id=game["id"]).status_code == 200
-    stored = fake_db.games.find_one({"id": game["id"]})
-    assert stored["state"]["players"][1]["deck"]["is_valid"] is False
+    assert fake_db.games.find_one({"id": game["id"]})["started_at"]
+
+
+def test_start_rejects_deck_whose_commander_left_the_pool(client, fake_db):
+    game = start_ready_game(client, fake_db)
+    fake_db.decks.update_one({"id": "db"}, {"$set": {"commander_id": "Gone (Base)"}})
+    resp = post(client, "start", ALICE, id=game["id"])
+    assert resp.status_code == 422
+    assert "commander" in resp.json()["detail"]
 
 
 def test_get_game_returns_single_game(client, fake_db):

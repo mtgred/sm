@@ -5,6 +5,7 @@ import uvicorn
 from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel, model_validator
 from .db import db
+from .game_setup import create_game, log, mulligan
 from .models import Card, DeckBase, ValidationIssue
 from .rules import rules_manifest
 from .studio import load_cards
@@ -161,6 +162,26 @@ def lobby_player(player: dict) -> dict:
     }
 
 
+def leave_game(game: dict, username: str):
+    """Leaving is allowed at any point, mid-game included: quitting a running
+    duel abandons it rather than pausing it, so there is always a way out of a
+    game. The state's seats are a start-time snapshot and stay on the board for
+    whoever is still at the table (they can leave in turn); the game document
+    goes away with its last player."""
+    players = [p for p in game["players"] if p["username"] != username]
+    if len(players) == len(game["players"]):
+        return
+    if not players:
+        db.games.delete_one({"id": game["id"]})
+        return
+    update: dict = {"players": players}
+    if state := game.get("state"):
+        seat = next((s for s in state["players"] if s["user"]["username"] == username), None)
+        log(state, "left the game", seat)
+        update["state"] = state
+    db.games.update_one({"id": game["id"]}, {"$set": update})
+
+
 def player_deck(game: dict, player: dict) -> dict:
     """The deck a player brings to this game, re-checked at use time (it may
     have been edited or deleted since it was selected in the lobby). An illegal
@@ -175,18 +196,21 @@ def player_deck(game: dict, player: dict) -> dict:
 
 
 def initial_state(game: dict) -> dict:
-    """Placeholder game state: players with their decks snapshotted at start,
-    so editing a deck never touches a running game."""
-    return {
-        "log": [],
-        "players": [
-            {
-                "user": {"username": p["username"], "hash": p["hash"]},
-                "deck": player_deck(game, p),
-            }
-            for p in game["players"]
-        ],
-    }
+    """Game state via game_setup.create_game, with each player's deck
+    snapshotted (expanded into piles) at start, so editing a deck never
+    touches a running game."""
+    seats = [
+        {
+            "user": {"username": p["username"], "hash": p["hash"]},
+            "deck": player_deck(game, p),
+        }
+        for p in game["players"]
+    ]
+    try:
+        return create_game(seats, load_cards())
+    except ValueError as err:
+        # e.g. the deck's commander row was edited out of the Studio pool
+        raise HTTPException(status_code=422, detail=str(err))
 
 
 @app.get("/games")
@@ -219,14 +243,7 @@ async def post_games(req: LobbyRequest):
             players = game["players"] + [lobby_player(req.player)]
             db.games.update_one({"id": req.id}, {"$set": {"players": players}})
         case "leave":
-            game = find_game(req.id)
-            require_not_started(game)
-            players = [p for p in game["players"] if p["username"] != req.player["username"]]
-            if len(players) != len(game["players"]):
-                if players:
-                    db.games.update_one({"id": req.id}, {"$set": {"players": players}})
-                else:
-                    db.games.delete_one({"id": req.id})
+            leave_game(find_game(req.id), req.player["username"])
         case "deck":
             game = find_game(req.id)
             require_not_started(game)
@@ -251,6 +268,43 @@ async def post_games(req: LobbyRequest):
                 "$set": {"state": initial_state(game), "started_at": datetime.now()},
             })
     return list_games()
+
+
+# -- In-game actions ----------------------------------------------------------
+#
+# Same trust model as the lobby: fireball injects `player` and broadcasts the
+# returned game document to everyone in the `soulmasters/game/{id}` channel.
+# Actions mutate the state dict in place (uprising-style) and return either
+# the state or {"error": ...}.
+
+GAME_ACTIONS = {"mulligan": mulligan}
+
+
+class GameRequest(BaseModel):
+    action: Literal["mulligan"]
+    player: dict[str, str]
+    # mulligan: hand uids to put back (empty list / omitted keeps the hand)
+    data: list[str] | None = None
+
+
+@app.post("/game/{id}")
+async def post_game(id: str, req: GameRequest):
+    game = find_game(id)
+    state = game.get("state")
+    if not state:
+        raise HTTPException(status_code=422, detail="Game has not started")
+    player = next(
+        (p for p in state["players"] if p["user"]["username"] == req.player.get("username")),
+        None,
+    )
+    if not player:
+        raise HTTPException(status_code=403, detail="You are not playing in this game")
+    result = GAME_ACTIONS[req.action](state, player, req.data)
+    if "error" in result:
+        raise HTTPException(status_code=422, detail=result["error"])
+    db.games.update_one({"id": id}, {"$set": {"state": state}})
+    game["state"] = state
+    return game
 
 
 if __name__ == "__main__":
