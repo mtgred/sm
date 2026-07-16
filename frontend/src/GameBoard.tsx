@@ -6,10 +6,35 @@ import type { BoardCard, Card, ChatMessage, EmitFn, GameState, PlayerState, Prin
 // nothing here talks to the soulmasters server directly: actions are `game`
 // socket emits that fireball forwards to POST /game/{id} and broadcasts the
 // updated state back to everyone in the soulmasters/game/{id} channel.
-// Currently covers setup (zones, opening hands, the mulligan decision) and
-// energy plays: face-down energy, face-up Artifact Cores and core swaps.
+// Currently covers setup (zones, opening hands, the mulligan decision),
+// energy plays (face-down energy, face-up Artifact Cores and core swaps) and
+// the turn cycle: End turn passes to the opponent, whose upkeep readies their
+// cards and resets the per-turn energy allowance before they draw.
 
 const RING = "soulmasters"
+
+// The slice of GET /rules the board needs (see server/rules.py). Fetched
+// rather than hardcoded so the server stays the single source of truth; if
+// the fetch fails the buttons stay enabled and the server still enforces.
+interface TurnRules {
+  energyPlaysPerTurn: number
+  firstTurnEnergyPlays: number
+}
+
+const useTurnRules = (): TurnRules | null => {
+  const [rules, setRules] = useState<TurnRules | null>(null)
+  useEffect(() => {
+    fetch("/api/query", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ method: "get", ringId: RING, path: "rules" }),
+    })
+      .then(res => (res.ok ? res.json() : null))
+      .then(setRules)
+      .catch(() => setRules(null))
+  }, [])
+  return rules
+}
 
 interface CardPool {
   cards: Map<string, Card>
@@ -218,6 +243,7 @@ interface GameBoardProps {
 
 const GameBoard: React.FC<GameBoardProps> = ({ id, session, emit, gamestate }) => {
   const pool = useCardPool()
+  const rules = useTurnRules()
   const [returning, setReturning] = useState<string[]>([])
   // Energy play staging: a hand card picked to place, and (for a face-up
   // Artifact Core) an energy card picked to swap back to hand.
@@ -243,6 +269,11 @@ const GameBoard: React.FC<GameBoardProps> = ({ id, session, emit, gamestate }) =
   }
 
   const myTurn = gamestate.phase === "main" && myIndex >= 0 && gamestate.activePlayer === myIndex
+  // The per-turn energy allowance: 2, but only 1 on the game's first turn
+  // (server/rules.py; play_energy enforces it — this only gates the UI).
+  const firstTurn = gamestate.round === 1 && gamestate.activePlayer === gamestate.firstPlayer
+  const energyAllowance = rules ? (firstTurn ? rules.firstTurnEnergyPlays : rules.energyPlaysPerTurn) : null
+  const canPlayEnergy = myTurn && (energyAllowance === null || (me?.energyPlays ?? 0) < energyAllowance)
   const playingCard = myTurn ? me?.hand.find(card => card.uid === playing) : undefined
   // Only Artifact Cores may be played face up, which is also when a swap is allowed
   const playingCore = !!playingCard && pool.cards.get(playingCard.id)?.type === "Core"
@@ -255,12 +286,21 @@ const GameBoard: React.FC<GameBoardProps> = ({ id, session, emit, gamestate }) =
     setPlaying(null)
     setSwap(null)
   }
+  const endTurn = () => {
+    setPlaying(null)
+    setSwap(null)
+    send({ action: "end" })
+  }
 
-  const status = mulliganing
-    ? "Mulligan: select any cards to put on the bottom of your deck and redraw, or keep your hand."
-    : gamestate.phase === "mulligan" ?
-      "Waiting for your opponent's mulligan…"
-      : `Round ${gamestate.round} — ${gamestate.players[gamestate.activePlayer ?? gamestate.firstPlayer].user.username}'s turn`
+  const status = gamestate.phase === "over"
+    ? gamestate.winner != null
+      ? `${gamestate.players[gamestate.winner].user.username} wins the game`
+      : "The game is over"
+    : mulliganing
+      ? "Mulligan: select any cards to put on the bottom of your deck and redraw, or keep your hand."
+      : gamestate.phase === "mulligan" ?
+        "Waiting for your opponent's mulligan…"
+        : `Round ${gamestate.round} — ${gamestate.players[gamestate.activePlayer ?? gamestate.firstPlayer].user.username}'s turn`
 
   return (
     <div className="grow flex overflow-hidden p-3 gap-3">
@@ -294,6 +334,14 @@ const GameBoard: React.FC<GameBoardProps> = ({ id, session, emit, gamestate }) =
                 <button onClick={() => playEnergy(true)}>Play face up{swap ? " and swap" : ""}</button>}
               <button onClick={() => stageEnergy(playingCard.uid)}>Cancel</button>
             </>}
+          {myTurn && me && !playingCard &&
+            <>
+              {energyAllowance !== null &&
+                <span className="text-gray-400 whitespace-nowrap">
+                  Energy plays {me.energyPlays}/{energyAllowance}
+                </span>}
+              <button onClick={endTurn}>End turn</button>
+            </>}
         </div>
 
         <PlayerPanel
@@ -312,7 +360,7 @@ const GameBoard: React.FC<GameBoardProps> = ({ id, session, emit, gamestate }) =
                 id={card.id}
                 pool={pool}
                 selected={mulliganing ? returning.includes(card.uid) : card.uid === playing}
-                onClick={mulliganing ? () => toggle(card.uid) : myTurn ? () => stageEnergy(card.uid) : undefined}
+                onClick={mulliganing ? () => toggle(card.uid) : canPlayEnergy ? () => stageEnergy(card.uid) : undefined}
               />)
               : gamestate.players[bottom].hand.length > 0 && <Pile count={gamestate.players[bottom].hand.length} />}
           </Zone>

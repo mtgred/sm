@@ -113,6 +113,7 @@ export interface GameState {
   phase: string
   firstPlayer: number
   activePlayer: number | null
+  winner?: number // player index, set when phase becomes "over"
   log: ChatMessage[]
   players: PlayerState[]
 }

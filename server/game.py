@@ -4,9 +4,9 @@ used by main.GAME_ACTIONS: mutate the state dict in place and return it, or
 return {"error": ...} without touching anything.
 """
 
-from .game_setup import log
+from .game_setup import draw, log
 from .models import Card, CardType
-from .rules import ENERGY_PLAYS_PER_TURN, FIRST_TURN_ENERGY_PLAYS
+from .rules import ENERGY_PLAYS_PER_TURN, FIRST_TURN_ENERGY_PLAYS, TURN_DRAW
 
 
 def energy_limit(player: dict, pool: dict[str, Card]) -> int:
@@ -80,4 +80,47 @@ def play_energy(state: dict, player: dict, data, pool: dict[str, Card]) -> dict:
         # face-down energy is hidden information: never name it in the log
         msg = "places a card face down as energy"
     log(state, msg, player)
+    return state
+
+
+def ready_all(player: dict):
+    """Upkeep readying (rulebook p. 14): every resting card turns upright —
+    energy, battleground units, equipment, the battlefield and reserves."""
+    battlefield = [player["battlefield"]] if player["battlefield"] else []
+    zones = [player["energyField"], player["battleground"], player["equipment"],
+             player["reserve"], battlefield]
+    for zone in zones:
+        for card in zone:
+            card["resting"] = False
+
+
+def end_turn(state: dict, player: dict, data=None, pool=None) -> dict:
+    """End the active player's turn (rulebook p. 14). Play passes to the
+    opponent, whose upkeep readies all their cards and resets their energy
+    allowance for the turn, followed by their 2-card draw phase; the round
+    advances once the turn comes back around to the first player. Being
+    unable to complete the draw loses the game on the spot (p. 11). `data`
+    is unused; it's part of the uniform game-action signature."""
+    if state.get("phase") != "main":
+        return {"error": "You can only end your turn in your main phase"}
+    if state["players"][state["activePlayer"]] is not player:
+        return {"error": "It is not your turn"}
+
+    log(state, "ends their turn", player)
+    state["activePlayer"] = (state["activePlayer"] + 1) % len(state["players"])
+    if state["activePlayer"] == state["firstPlayer"]:
+        state["round"] += 1
+        log(state, f"Round {state['round']} begins")
+
+    upkeep = state["players"][state["activePlayer"]]
+    ready_all(upkeep)
+    upkeep["energyPlays"] = 0
+    drawn = draw(upkeep, TURN_DRAW)
+    log(state, f"draws {drawn} card{'' if drawn == 1 else 's'}", upkeep)
+    if drawn < TURN_DRAW:
+        # "instructed to draw a card but their deck is empty" — they lose
+        state["phase"] = "over"
+        state["winner"] = state["players"].index(player)
+        log(state, "runs out of cards to draw", upkeep)
+        log(state, f"{player['user']['username']} wins the game")
     return state

@@ -1,15 +1,16 @@
-"""Energy-play / Artifact Core action tests (rulebook pp. 15-16).
+"""In-game action tests: energy plays / Artifact Cores (rulebook pp. 15-16)
+and the end-turn / upkeep cycle (p. 14).
 
-Pure `play_energy` tests run over the conftest card pool (Keshi Savageclaw
-(Base): Core Energy 6); the endpoint test drives POST /game/{id} through the
-same fake database as the other game tests.
+Pure action tests run over the conftest card pool (Keshi Savageclaw (Base):
+Core Energy 6); the endpoint tests drive POST /game/{id} through the same
+fake database as the other game tests.
 """
 
 import pytest
 from fastapi.testclient import TestClient
 
 from .. import main
-from ..game import play_energy
+from ..game import end_turn, play_energy
 from ..game_setup import create_game, mulligan
 from ..main import app
 from .test_game_setup import by_username, game_post, seat, started_game
@@ -128,6 +129,67 @@ def test_play_energy_guards(pool):
     assert "error" in play_energy(state, active, {"uid": core["uid"], "faceUp": True}, pool)
 
 
+# -- End turn / upkeep (rulebook p. 14) ----------------------------------------
+
+
+def test_end_turn_passes_to_the_opponent_who_draws(pool):
+    state, active = main_phase_state(pool)
+    other = state["players"][1 - state["activePlayer"]]
+    hand_size = len(other["hand"])
+    assert end_turn(state, active, None, pool) is state
+    assert state["players"][state["activePlayer"]] is other
+    assert state["phase"] == "main"
+    assert len(other["hand"]) == hand_size + 2
+
+
+def test_upkeep_readies_cards_and_resets_the_energy_counter(pool):
+    state, active = main_phase_state(pool)
+    other = state["players"][1 - state["activePlayer"]]
+    other["energyPlays"] = 2
+    other["energyField"] = [energy(uid="e0", resting=True), energy(uid="e1")]
+    other["battleground"] = [{"id": "Common Unit", "uid": "u0", "resting": True}]
+    other["reserve"][0]["resting"] = True
+    end_turn(state, active, None, pool)
+    assert other["energyPlays"] == 0
+    assert not any(c["resting"] for c in other["energyField"])
+    assert not other["battleground"][0]["resting"]
+    assert not other["reserve"][0]["resting"]
+
+
+def test_round_advances_when_the_turn_returns_to_the_first_player(pool):
+    state, first = main_phase_state(pool)
+    second = state["players"][1 - state["activePlayer"]]
+    end_turn(state, first, None, pool)
+    assert state["round"] == 1
+    end_turn(state, second, None, pool)
+    assert state["round"] == 2
+    assert state["players"][state["activePlayer"]] is first
+    # past round 1 the first player gets the full two energy plays
+    for card_id in ("Common Unit", "Common Spell"):
+        card = hand_card(first, card_id)
+        assert "error" not in play_energy(state, first, {"uid": card["uid"]}, pool)
+
+
+def test_failing_the_turn_draw_loses_the_game(pool):
+    state, active = main_phase_state(pool)
+    other = state["players"][1 - state["activePlayer"]]
+    other["deck"] = other["deck"][:1]
+    end_turn(state, active, None, pool)
+    assert state["phase"] == "over"
+    assert state["players"][state["winner"]] is active
+    assert state["log"][-1]["msg"].endswith("wins the game")
+    # the game is over: no further turns can be taken
+    assert "error" in end_turn(state, other, None, pool)
+
+
+def test_end_turn_guards(pool):
+    state, active = main_phase_state(pool)
+    other = state["players"][1 - state["activePlayer"]]
+    assert "error" in end_turn(state, other, None, pool)
+    state["phase"] = "mulligan"
+    assert "error" in end_turn(state, active, None, pool)
+
+
 # -- POST /game/{id} ----------------------------------------------------------
 
 
@@ -158,3 +220,16 @@ def test_game_energy_persists_and_returns_the_game(client, fake_db):
     assert played["energyPlays"] == 1
     stored = fake_db.games.find_one({"id": game["id"]})
     assert by_username(stored["state"], active["user"]["username"])["energyPlays"] == 1
+
+
+def test_game_end_turn_persists_the_pass(client, fake_db):
+    game = started_game(client, fake_db)
+    for player in (ALICE, BOB):
+        game_post(client, game["id"], "mulligan", player, [])
+    state = fake_db.games.find_one({"id": game["id"]})["state"]
+    active = state["players"][state["activePlayer"]]
+    resp = game_post(client, game["id"], "end", active["user"])
+    assert resp.status_code == 200
+    assert resp.json()["state"]["activePlayer"] == 1 - state["activePlayer"]
+    stored = fake_db.games.find_one({"id": game["id"]})
+    assert stored["state"]["activePlayer"] == 1 - state["activePlayer"]
