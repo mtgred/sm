@@ -10,7 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from .. import main
-from ..game import end_turn, play_energy, rest_energy
+from ..game import cast_card, end_turn, play_energy, rest_energy
 from ..game_setup import create_game, mulligan
 from ..main import app
 from .test_game_setup import by_username, game_post, seat, started_game
@@ -168,6 +168,97 @@ def test_rest_energy_guards(pool):
     assert "error" in rest_energy(state, active, ["e0"], pool)
 
 
+# -- Casting units and spells (rulebook pp. 17-18) -----------------------------
+
+
+def test_cast_unit_rests_energy_and_enters_with_sickness(pool):
+    state, active = main_phase_state(pool)
+    active["energyField"] = [energy(uid=f"e{i}") for i in range(3)]
+    card = hand_card(active, "Common Unit")  # cost 2
+    assert cast_card(state, active, {"uid": card["uid"], "energy": ["e0", "e1"]}, pool) is state
+    assert active["battleground"] == [
+        {"id": "Common Unit", "uid": card["uid"], "resting": False, "enteredThisRound": True}
+    ]
+    assert card["uid"] not in [c["uid"] for c in active["hand"]]
+    assert [c["resting"] for c in active["energyField"]] == [True, True, False]
+    assert state["log"][-1]["msg"] == "casts Common Unit, resting 2 energy"
+
+
+def test_cast_spell_resolves_to_the_discard_pile(pool):
+    state, active = main_phase_state(pool)
+    active["energyField"] = [energy(uid="e0")]
+    card = hand_card(active, "Common Spell")  # cost 1
+    cast_card(state, active, {"uid": card["uid"], "energy": ["e0"]}, pool)
+    assert active["discard"] == [{"id": "Common Spell", "uid": card["uid"]}]
+    assert active["battleground"] == []
+    assert active["energyField"][0]["resting"] is True
+
+
+def test_cast_a_free_card_without_energy(pool):
+    state, active = main_phase_state(pool)
+    card = hand_card(active, "Uncommon Unit")  # cost 0
+    assert "error" not in cast_card(state, active, {"uid": card["uid"]}, pool)
+    assert state["log"][-1]["msg"] == "casts Uncommon Unit"
+
+
+def test_cast_requires_exact_payment(pool):
+    state, active = main_phase_state(pool)
+    active["energyField"] = [energy(uid=f"e{i}") for i in range(3)]
+    card = hand_card(active, "Common Unit")  # cost 2
+    for payment in ([], ["e0"], ["e0", "e1", "e2"]):
+        assert "error" in cast_card(state, active, {"uid": card["uid"], "energy": payment}, pool)
+    # a rejected cast never partially applies
+    assert not any(c["resting"] for c in active["energyField"])
+    assert card["uid"] in [c["uid"] for c in active["hand"]]
+
+
+def test_cast_rejects_spent_or_missing_energy(pool):
+    state, active = main_phase_state(pool)
+    active["energyField"] = [energy(uid="ready"), energy(uid="rested", resting=True)]
+    card = hand_card(active, "Common Unit")
+    for payment in (["ready", "rested"], ["ready", "nope"], ["ready", "ready"]):
+        assert "error" in cast_card(state, active, {"uid": card["uid"], "energy": payment}, pool)
+    assert active["energyField"][0]["resting"] is False
+
+
+def test_battleground_capacity_caps_units_but_not_spells(pool):
+    state, active = main_phase_state(pool)
+    active["energyField"] = [energy(uid=f"e{i}") for i in range(3)]
+    active["battleground"] = [
+        {"id": "Common Unit", "uid": f"u{i}", "resting": False} for i in range(5)
+    ]
+    unit = hand_card(active, "Common Unit")
+    assert "error" in cast_card(state, active, {"uid": unit["uid"], "energy": ["e0", "e1"]}, pool)
+    spell = hand_card(active, "Common Spell")
+    assert "error" not in cast_card(state, active, {"uid": spell["uid"], "energy": ["e0"]}, pool)
+
+
+def test_cast_guards(pool):
+    state, active = main_phase_state(pool)
+    other = state["players"][1 - state["activePlayer"]]
+    theirs = hand_card(other, "Uncommon Unit")
+    assert "error" in cast_card(state, other, {"uid": theirs["uid"]}, pool)
+    assert "error" in cast_card(state, active, {"uid": "not-in-hand"}, pool)
+    # Cores are placed as energy, abilities are their own action, and a card
+    # whose cost cell is still unset in Studio can't be priced
+    for card_id in ("Energy Core", "Keshi Ability", "Rare Unit"):
+        card = hand_card(active, card_id)
+        assert "error" in cast_card(state, active, {"uid": card["uid"]}, pool)
+    state["phase"] = "mulligan"
+    card = hand_card(active, "Uncommon Unit")
+    assert "error" in cast_card(state, active, {"uid": card["uid"]}, pool)
+
+
+def test_upkeep_clears_summoning_sickness(pool):
+    state, active = main_phase_state(pool)
+    other = state["players"][1 - state["activePlayer"]]
+    other["battleground"] = [
+        {"id": "Common Unit", "uid": "u0", "resting": False, "enteredThisRound": True}
+    ]
+    end_turn(state, active, None, pool)
+    assert other["battleground"][0]["enteredThisRound"] is False
+
+
 # -- End turn / upkeep (rulebook p. 14) ----------------------------------------
 
 
@@ -283,6 +374,28 @@ def test_game_rest_persists_until_upkeep(client, fake_db):
     resp = game_post(client, game["id"], "end", other["user"])
     readied = by_username(resp.json()["state"], active["user"]["username"])
     assert readied["energyField"][0]["resting"] is False
+
+
+def test_game_cast_persists_the_unit(client, fake_db):
+    game = started_game(client, fake_db)
+    for player in (ALICE, BOB):
+        game_post(client, game["id"], "mulligan", player, [])
+    # plant a known hand card and ready energy in the live stored state
+    stored = next(d for d in fake_db.games.docs if d["id"] == game["id"])
+    state = stored["state"]
+    active = state["players"][state["activePlayer"]]
+    active["hand"].append({"id": "Common Unit", "uid": "planted"})
+    active["energyField"] = [energy(uid="e0"), energy(uid="e1")]
+    resp = game_post(
+        client, game["id"], "cast", active["user"],
+        {"uid": "planted", "energy": ["e0", "e1"]},
+    )
+    assert resp.status_code == 200
+    caster = by_username(resp.json()["state"], active["user"]["username"])
+    assert caster["battleground"][0]["uid"] == "planted"
+    assert all(c["resting"] for c in caster["energyField"])
+    stored = fake_db.games.find_one({"id": game["id"]})
+    assert by_username(stored["state"], active["user"]["username"])["battleground"]
 
 
 def test_game_end_turn_persists_the_pass(client, fake_db):

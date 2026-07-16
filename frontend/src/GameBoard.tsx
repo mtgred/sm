@@ -8,9 +8,11 @@ import type { BoardCard, Card, ChatMessage, EmitFn, GameState, PlayerState, Prin
 // updated state back to everyone in the soulmasters/game/{id} channel.
 // Currently covers setup (zones, opening hands, the mulligan decision),
 // energy plays (face-down energy, face-up Artifact Cores and core swaps),
-// resting energy to pay costs (click ready energy, then confirm) and the turn
-// cycle: End turn passes to the opponent, whose upkeep readies their cards
-// and resets the per-turn energy allowance before they draw.
+// resting energy to pay costs (click ready energy, then confirm), casting
+// units and spells from hand (pick the card, pick or auto-pick the energy to
+// rest as payment) and the turn cycle: End turn passes to the opponent, whose
+// upkeep readies their cards and resets the per-turn energy allowance before
+// they draw.
 
 const RING = "soulmasters"
 
@@ -297,8 +299,14 @@ const GameBoard: React.FC<GameBoardProps> = ({ id, session, emit, gamestate }) =
   const energyAllowance = rules ? (firstTurn ? rules.firstTurnEnergyPlays : rules.energyPlaysPerTurn) : null
   const canPlayEnergy = myTurn && (energyAllowance === null || (me?.energyPlays ?? 0) < energyAllowance)
   const playingCard = myTurn ? me?.hand.find(card => card.uid === playing) : undefined
+  const playingData = playingCard ? pool.cards.get(playingCard.id) : undefined
   // Only Artifact Cores may be played face up, which is also when a swap is allowed
-  const playingCore = !!playingCard && pool.cards.get(playingCard.id)?.type === "Core"
+  const playingCore = playingData?.type === "Core"
+  // Units and spells are castable by resting energy equal to their cost; a
+  // null cost means the Studio cell is still unset, so the card can't be
+  // priced (the server rejects it too).
+  const castCost = playingData?.type === "Unit" || playingData?.type === "Spell" ? playingData.cost : null
+  const readyEnergy = me ? me.energyField.filter(card => !card.resting).length : 0
   const stageEnergy = (uid: string) => {
     setSwap(null)
     setRestUids([])
@@ -308,6 +316,20 @@ const GameBoard: React.FC<GameBoardProps> = ({ id, session, emit, gamestate }) =
     send({ action: "energy", data: { uid: playing, faceUp, swap: faceUp ? swap : null } })
     setPlaying(null)
     setSwap(null)
+    setRestUids([])
+  }
+  const cast = () => {
+    if (castCost == null || !me) return
+    // Payment: the energy cards the player clicked, topped up with ready
+    // energy in field order until the cost is covered.
+    const payment = [...restUids]
+    for (const card of me.energyField) {
+      if (payment.length >= castCost) break
+      if (!card.resting && !payment.includes(card.uid)) payment.push(card.uid)
+    }
+    send({ action: "cast", data: { uid: playing, energy: payment } })
+    setPlaying(null)
+    setRestUids([])
   }
   // Resting energy is how costs are paid (rulebook pp. 12, 15, 17) and is
   // allowed on either player's turn; the server rejects already-resting cards.
@@ -371,12 +393,20 @@ const GameBoard: React.FC<GameBoardProps> = ({ id, session, emit, gamestate }) =
             </>}
           {playingCard &&
             <>
-              {playingCore &&
+              {playingCore && canPlayEnergy &&
                 <span className="text-gray-400 whitespace-nowrap">
                   {swap ? "Swapping 1 energy card back to hand" : "Click your energy to swap a card back"}
                 </span>}
-              <button onClick={() => playEnergy(false)}>Play face down as energy</button>
-              {playingCore &&
+              {castCost != null && castCost > 0 &&
+                <span className="text-gray-400 whitespace-nowrap">
+                  {restUids.length}/{castCost} energy picked to rest
+                </span>}
+              {castCost != null &&
+                <button disabled={readyEnergy < castCost || restUids.length > castCost} onClick={cast}>
+                  Cast{castCost > 0 ? ` — rest ${castCost} energy` : ""}
+                </button>}
+              {canPlayEnergy && <button onClick={() => playEnergy(false)}>Play face down as energy</button>}
+              {playingCore && canPlayEnergy &&
                 <button onClick={() => playEnergy(true)}>Play face up{swap ? " and swap" : ""}</button>}
               <button onClick={() => stageEnergy(playingCard.uid)}>Cancel</button>
             </>}
@@ -420,7 +450,7 @@ const GameBoard: React.FC<GameBoardProps> = ({ id, session, emit, gamestate }) =
                 id={card.id}
                 pool={pool}
                 selected={mulliganing ? returning.includes(card.uid) : card.uid === playing}
-                onClick={mulliganing ? () => toggle(card.uid) : canPlayEnergy ? () => stageEnergy(card.uid) : undefined}
+                onClick={mulliganing ? () => toggle(card.uid) : myTurn ? () => stageEnergy(card.uid) : undefined}
               />)
               : gamestate.players[bottom].hand.length > 0 && <Pile count={gamestate.players[bottom].hand.length} />}
           </Zone>

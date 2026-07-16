@@ -40,9 +40,9 @@ def pool() -> dict[str, Card]:
             core_energy=4,
             hp=10,
         ),
-        # Units
-        card("Common Unit", rarity="Common"),
-        card("Uncommon Unit", rarity="Uncommon"),
+        # Units (costs cover the casting tests: 2, free, and unset-in-Studio)
+        card("Common Unit", rarity="Common", cost=2, attack=2, health=2),
+        card("Uncommon Unit", rarity="Uncommon", cost=0),
         card("Rare Unit", rarity="Rare"),
         card("Epic Unit", rarity="Epic"),
         card("Legendary Unit", rarity="Legendary"),
@@ -53,7 +53,7 @@ def pool() -> dict[str, Card]:
         card("Battle Token", card_type="Token"),
         card("Rage", card_type="Resource"),
         # Non-units
-        card("Common Spell", card_type="Spell", rarity="Common"),
+        card("Common Spell", card_type="Spell", rarity="Common", cost=1),
         card("Merc Spell", card_type="Spell", faction="Mercenary", rarity="Common"),
         card("Celestial Spell", card_type="Spell", rarity="Celestial"),
         card(

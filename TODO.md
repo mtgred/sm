@@ -35,10 +35,11 @@ The economic core: nothing else can be cast until costs can be paid.
       deck → field; allowed any time, even during upkeep
 - [ ] **Generate / spend resources**: move resource deck ↔ field counters;
       ignore generate instructions when the resource deck is empty (p. 12)
-- [ ] **Cast a unit**: main phase, your turn only; rest energy = cost;
+- [x] **Cast a unit**: main phase, your turn only; rest energy = cost;
       battleground capacity 5; enters with summoning sickness (track
       `enteredThisRound` / rest-skill lockout)
-- [ ] **Cast a spell**: main phase, your turn only; resolve then discard
+- [x] **Cast a spell**: main phase, your turn only; resolve then discard
+      (effects manual until the Milestone 4 skills engine)
 - [ ] **Cast an ability**: any time, including opponent's turn / in response
       (full timing comes with the stack in Milestone 3); resolve then discard
 - [ ] **Artifact Cores are never cast** — energy-field placement only (done)

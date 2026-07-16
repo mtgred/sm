@@ -6,7 +6,12 @@ return {"error": ...} without touching anything.
 
 from .game_setup import draw, log
 from .models import Card, CardType
-from .rules import ENERGY_PLAYS_PER_TURN, FIRST_TURN_ENERGY_PLAYS, TURN_DRAW
+from .rules import (
+    BATTLEGROUND_CAPACITY,
+    ENERGY_PLAYS_PER_TURN,
+    FIRST_TURN_ENERGY_PLAYS,
+    TURN_DRAW,
+)
 
 
 def energy_limit(player: dict, pool: dict[str, Card]) -> int:
@@ -83,6 +88,23 @@ def play_energy(state: dict, player: dict, data, pool: dict[str, Card]) -> dict:
     return state
 
 
+def ready_energy(player: dict, uids) -> tuple[list[dict], str | None]:
+    """Resolve `uids` to the player's ready energy cards, in order. Returns
+    (cards, None), or ([], error) when any uid is missing, repeated, not in
+    the energy field, or already resting — payments never partially apply."""
+    field = {c["uid"]: c for c in player["energyField"]}
+    if (
+        not isinstance(uids, list)
+        or len(set(uids)) != len(uids)
+        or not set(uids) <= field.keys()
+    ):
+        return [], "Those cards are not in your energy field"
+    cards = [field[uid] for uid in uids]
+    if any(card.get("resting") for card in cards):
+        return [], "Resting energy is already spent until your upkeep"
+    return cards, None
+
+
 def rest_energy(state: dict, player: dict, data, pool=None) -> dict:
     """Rest chosen ready energy cards to pay a cost (rulebook pp. 12, 15, 17):
     resting is how energy is spent, one 💠 per card. Allowed on either
@@ -92,16 +114,65 @@ def rest_energy(state: dict, player: dict, data, pool=None) -> dict:
     unused, part of the uniform game-action signature."""
     if state.get("phase") != "main":
         return {"error": "Energy can only be rested while the game is in play"}
-    uids = data if isinstance(data, list) else []
-    field = {c["uid"]: c for c in player["energyField"]}
-    if not uids or len(set(uids)) != len(uids) or not set(uids) <= field.keys():
-        return {"error": "Those cards are not in your energy field"}
-    if any(field[uid].get("resting") for uid in uids):
-        return {"error": "Resting energy is already spent until your upkeep"}
-    for uid in uids:
-        field[uid]["resting"] = True
-    count = len(uids)
-    log(state, f"rests {count} energy card{'' if count == 1 else 's'}", player)
+    cards, error = ready_energy(player, data)
+    if error or not cards:
+        return {"error": error or "Choose at least one energy card to rest"}
+    for card in cards:
+        card["resting"] = True
+    log(state, f"rests {len(cards)} energy card{'' if len(cards) == 1 else 's'}", player)
+    return state
+
+
+def cast_card(state: dict, player: dict, data, pool: dict[str, Card]) -> dict:
+    """Cast a unit or spell from hand (rulebook pp. 17-18): pay its cost by
+    resting exactly that many ready energy cards, then resolve. A unit joins
+    the battleground (up to the capacity of 5) with summoning sickness until
+    the owner's next upkeep, tracked as `enteredThisRound`; a spell resolves
+    and goes to the discard pile (card effects stay manual until the skills
+    engine lands). Main phase, your turn only — abilities and reserve cards
+    have their own timing and are separate actions. `data` is
+    {"uid": hand card, "energy": [energy uids to rest]}."""
+    if state.get("phase") != "main":
+        return {"error": "Units and spells can only be cast in your main phase"}
+    if state["players"][state["activePlayer"]] is not player:
+        return {"error": "It is not your turn"}
+    data = data if isinstance(data, dict) else {}
+
+    played = next((c for c in player["hand"] if c["uid"] == data.get("uid")), None)
+    if not played:
+        return {"error": "That card is not in your hand"}
+    card = pool.get(played["id"])
+    if not card:
+        return {"error": f"{played['id']} is missing from the card pool"}
+    if card.card_type == CardType.CORE:
+        return {"error": "Artifact Cores are never cast — place them as energy instead"}
+    if card.card_type not in (CardType.UNIT, CardType.SPELL):
+        return {"error": "Only units and spells can be cast from your hand"}
+    if card.cost is None:
+        return {"error": f"{card.id} has no cost in the card pool"}
+    if card.is_unit and len(player["battleground"]) >= BATTLEGROUND_CAPACITY:
+        return {"error": f"Your battleground is full ({BATTLEGROUND_CAPACITY} units)"}
+
+    payment, error = ready_energy(player, data.get("energy") or [])
+    if error:
+        return {"error": error}
+    if len(payment) != card.cost:
+        return {"error": f"{card.id} costs {card.cost} — rest exactly that much energy"}
+
+    for energy in payment:
+        energy["resting"] = True
+    player["hand"] = [c for c in player["hand"] if c["uid"] != played["uid"]]
+    if card.is_unit:
+        player["battleground"].append({
+            "id": played["id"],
+            "uid": played["uid"],
+            "resting": False,
+            "enteredThisRound": True,  # summoning sickness (p. 21)
+        })
+    else:
+        player["discard"].append({"id": played["id"], "uid": played["uid"]})
+    rested = f", resting {card.cost} energy" if card.cost else ""
+    log(state, f"casts {played['id']}{rested}", player)
     return state
 
 
@@ -136,6 +207,8 @@ def end_turn(state: dict, player: dict, data=None, pool=None) -> dict:
 
     upkeep = state["players"][state["activePlayer"]]
     ready_all(upkeep)
+    for card in upkeep["battleground"]:
+        card["enteredThisRound"] = False  # summoning sickness wears off
     upkeep["energyPlays"] = 0
     drawn = draw(upkeep, TURN_DRAW)
     log(state, f"draws {drawn} card{'' if drawn == 1 else 's'}", upkeep)

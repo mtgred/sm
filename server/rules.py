@@ -47,6 +47,7 @@ OPENING_HAND_SIZE = 5  # drawn at setup, then one optional mulligan
 TURN_DRAW = 2  # cards drawn in each turn's Draw phase
 ENERGY_PLAYS_PER_TURN = 2  # cards placed into the energy field per turn...
 FIRST_TURN_ENERGY_PLAYS = 1  # ...but only 1 on the game's very first turn
+BATTLEGROUND_CAPACITY = 5  # units per player; nothing can exceed it (p. 18)
 
 
 def rules_manifest() -> dict:
@@ -65,4 +66,5 @@ def rules_manifest() -> dict:
         "turnDraw": TURN_DRAW,
         "energyPlaysPerTurn": ENERGY_PLAYS_PER_TURN,
         "firstTurnEnergyPlays": FIRST_TURN_ENERGY_PLAYS,
+        "battlegroundCapacity": BATTLEGROUND_CAPACITY,
     }

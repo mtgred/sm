@@ -75,6 +75,7 @@ export interface BoardCard {
   uid: string
   faceUp?: boolean
   resting?: boolean
+  enteredThisRound?: boolean // summoning sickness until the owner's next upkeep
 }
 
 export interface CommanderState {
