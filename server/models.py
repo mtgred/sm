@@ -34,6 +34,7 @@ class CardType(str, Enum):
     CORE = "Core"  # Artifact Core
     RESERVE = "Reserve"
     TOKEN = "Token"  # created during play; never deck-legal
+    RESOURCE = "Resource"  # the faction resources; derived, never deck-legal
 
 
 NON_UNIT_TYPES = {CardType.SPELL, CardType.ABILITY, CardType.CORE}

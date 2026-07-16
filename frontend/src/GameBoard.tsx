@@ -6,7 +6,8 @@ import type { BoardCard, Card, ChatMessage, EmitFn, GameState, PlayerState, Prin
 // nothing here talks to the soulmasters server directly: actions are `game`
 // socket emits that fireball forwards to POST /game/{id} and broadcasts the
 // updated state back to everyone in the soulmasters/game/{id} channel.
-// Currently covers setup: zones, opening hands and the mulligan decision.
+// Currently covers setup (zones, opening hands, the mulligan decision) and
+// energy plays: face-down energy, face-up Artifact Cores and core swaps.
 
 const RING = "soulmasters"
 
@@ -88,6 +89,38 @@ const Pile: React.FC<{ count: number; tone?: "gold" | "orange" }> = ({ count, to
   </div>
 )
 
+// A card in the energy field. The owner sees face-down cards (the rulebook
+// lets you look at your own face-down energy any time); everyone else sees a
+// card back. Resting cards tilt sideways.
+interface EnergyCardProps {
+  card: BoardCard
+  mine: boolean
+  pool: CardPool
+  selected?: boolean
+  onClick?: () => void
+}
+
+const EnergyCard: React.FC<EnergyCardProps> = ({ card, mine, pool, selected, onClick }) => {
+  const resting = card.resting ? "rotate-12" : ""
+  if (!card.faceUp && !mine) {
+    return (
+      <div
+        className={`${CARD} rounded-md border border-amber-950 bg-gradient-to-br from-amber-600 to-amber-900 ${resting}`}
+        title="Face-down energy"
+      />
+    )
+  }
+  return (
+    <div className={`relative shrink-0 ${resting}`}>
+      <CardView id={card.id} pool={pool} selected={selected} onClick={onClick} />
+      {!card.faceUp &&
+        <div className="absolute inset-x-0 bottom-0 rounded-b-md bg-black/70 text-center text-[10px] uppercase tracking-wider text-gray-300 pointer-events-none">
+          Face down
+        </div>}
+    </div>
+  )
+}
+
 const Zone: React.FC<{ label: string; grow?: boolean; children?: React.ReactNode }> = ({ label, grow, children }) => (
   <div className={`flex flex-col gap-1 min-w-0 ${grow ? "grow" : ""}`}>
     <div className="text-xs uppercase tracking-wider text-gray-400">{label}</div>
@@ -102,10 +135,13 @@ interface PanelProps {
   active: boolean
   flipped: boolean // opponent panel: hand row on top, zones below
   pool: CardPool
+  mine?: boolean // the viewer owns this panel and may see face-down energy
+  swapUid?: string | null // energy card staged to swap back to hand
+  onEnergyClick?: (uid: string) => void
   children?: React.ReactNode // hand + reserve row (owner-dependent, passed in)
 }
 
-const PlayerPanel: React.FC<PanelProps> = ({ player, active, flipped, pool, children }) => {
+const PlayerPanel: React.FC<PanelProps> = ({ player, active, flipped, pool, mine, swapUid, onEnergyClick, children }) => {
   const commanderId = player.commander.stages[player.commander.stage]
   return (
     <div className={`pane rounded-lg p-3 flex gap-3 ${flipped ? "flex-col-reverse" : "flex-col"}`}>
@@ -143,8 +179,16 @@ const PlayerPanel: React.FC<PanelProps> = ({ player, active, flipped, pool, chil
       </div>
 
       <div className="flex gap-3">
-        <Zone label="Energy field" grow>
-          {player.energyField.map(card => <CardView key={card.uid} id={card.id} pool={pool} />)}
+        <Zone label={`Energy field (${player.energyField.length})`} grow>
+          {player.energyField.map(card =>
+            <EnergyCard
+              key={card.uid}
+              card={card}
+              mine={!!mine}
+              pool={pool}
+              selected={card.uid === swapUid}
+              onClick={onEnergyClick ? () => onEnergyClick(card.uid) : undefined}
+            />)}
         </Zone>
         {children}
       </div>
@@ -175,6 +219,10 @@ interface GameBoardProps {
 const GameBoard: React.FC<GameBoardProps> = ({ id, session, emit, gamestate }) => {
   const pool = useCardPool()
   const [returning, setReturning] = useState<string[]>([])
+  // Energy play staging: a hand card picked to place, and (for a face-up
+  // Artifact Core) an energy card picked to swap back to hand.
+  const [playing, setPlaying] = useState<string | null>(null)
+  const [swap, setSwap] = useState<string | null>(null)
 
   if (!pool || !gamestate?.players?.length) return <div />
 
@@ -192,6 +240,20 @@ const GameBoard: React.FC<GameBoardProps> = ({ id, session, emit, gamestate }) =
   const confirmMulligan = (uids: string[]) => {
     send({ action: "mulligan", data: uids })
     setReturning([])
+  }
+
+  const myTurn = gamestate.phase === "main" && myIndex >= 0 && gamestate.activePlayer === myIndex
+  const playingCard = myTurn ? me?.hand.find(card => card.uid === playing) : undefined
+  // Only Artifact Cores may be played face up, which is also when a swap is allowed
+  const playingCore = !!playingCard && pool.cards.get(playingCard.id)?.type === "Core"
+  const stageEnergy = (uid: string) => {
+    setSwap(null)
+    setPlaying(current => (current === uid ? null : uid))
+  }
+  const playEnergy = (faceUp: boolean) => {
+    send({ action: "energy", data: { uid: playing, faceUp, swap: faceUp ? swap : null } })
+    setPlaying(null)
+    setSwap(null)
   }
 
   const status = mulliganing
@@ -221,6 +283,17 @@ const GameBoard: React.FC<GameBoardProps> = ({ id, session, emit, gamestate }) =
               </button>
               <button onClick={() => confirmMulligan([])}>Keep hand</button>
             </>}
+          {playingCard &&
+            <>
+              {playingCore &&
+                <span className="text-gray-400 whitespace-nowrap">
+                  {swap ? "Swapping 1 energy card back to hand" : "Click your energy to swap a card back"}
+                </span>}
+              <button onClick={() => playEnergy(false)}>Play face down as energy</button>
+              {playingCore &&
+                <button onClick={() => playEnergy(true)}>Play face up{swap ? " and swap" : ""}</button>}
+              <button onClick={() => stageEnergy(playingCard.uid)}>Cancel</button>
+            </>}
         </div>
 
         <PlayerPanel
@@ -228,6 +301,9 @@ const GameBoard: React.FC<GameBoardProps> = ({ id, session, emit, gamestate }) =
           active={gamestate.activePlayer === bottom}
           flipped={false}
           pool={pool}
+          mine={!!me}
+          swapUid={swap}
+          onEnergyClick={playingCore ? uid => setSwap(current => (current === uid ? null : uid)) : undefined}
         >
           <Zone label={`Hand (${gamestate.players[bottom].hand.length})`}>
             {me ? me.hand.map((card: BoardCard) =>
@@ -235,8 +311,8 @@ const GameBoard: React.FC<GameBoardProps> = ({ id, session, emit, gamestate }) =
                 key={card.uid}
                 id={card.id}
                 pool={pool}
-                selected={returning.includes(card.uid)}
-                onClick={mulliganing ? () => toggle(card.uid) : undefined}
+                selected={mulliganing ? returning.includes(card.uid) : card.uid === playing}
+                onClick={mulliganing ? () => toggle(card.uid) : myTurn ? () => stageEnergy(card.uid) : undefined}
               />)
               : gamestate.players[bottom].hand.length > 0 && <Pile count={gamestate.players[bottom].hand.length} />}
           </Zone>

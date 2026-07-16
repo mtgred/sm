@@ -68,10 +68,13 @@ export type Printing = {
 }
 
 // A physical card in the game state: `id` names the card in the pool, `uid`
-// identifies this copy
+// identifies this copy. Energy field cards also carry their orientation:
+// face down (any card) or face up (Artifact Cores only), ready or resting.
 export interface BoardCard {
   id: string
   uid: string
+  faceUp?: boolean
+  resting?: boolean
 }
 
 export interface CommanderState {
@@ -94,6 +97,7 @@ export interface PlayerState {
   equipment: BoardCard[]
   battlefield: BoardCard | null
   energyField: BoardCard[]
+  energyPlays: number // energy placed this turn (the server enforces the cap)
   reserve: BoardCard[]
   mulliganed: boolean
   prompts: unknown[]

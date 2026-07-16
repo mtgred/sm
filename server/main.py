@@ -5,6 +5,7 @@ import uvicorn
 from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel, model_validator
 from .db import db
+from .game import play_energy
 from .game_setup import create_game, log, mulligan
 from .models import Card, DeckBase, ValidationIssue
 from .rules import rules_manifest
@@ -277,14 +278,15 @@ async def post_games(req: LobbyRequest):
 # Actions mutate the state dict in place (uprising-style) and return either
 # the state or {"error": ...}.
 
-GAME_ACTIONS = {"mulligan": mulligan}
+GAME_ACTIONS = {"mulligan": mulligan, "energy": play_energy}
 
 
 class GameRequest(BaseModel):
-    action: Literal["mulligan"]
+    action: Literal["mulligan", "energy"]
     player: dict[str, str]
     # mulligan: hand uids to put back (empty list / omitted keeps the hand)
-    data: list[str] | None = None
+    # energy: {"uid": hand card, "faceUp"?: bool, "swap"?: energy uid to return}
+    data: list[str] | dict | None = None
 
 
 @app.post("/game/{id}")
@@ -299,7 +301,7 @@ async def post_game(id: str, req: GameRequest):
     )
     if not player:
         raise HTTPException(status_code=403, detail="You are not playing in this game")
-    result = GAME_ACTIONS[req.action](state, player, req.data)
+    result = GAME_ACTIONS[req.action](state, player, req.data, load_cards())
     if "error" in result:
         raise HTTPException(status_code=422, detail=result["error"])
     db.games.update_one({"id": id}, {"$set": {"state": state}})

@@ -62,16 +62,17 @@ def test_wrong_split_at_correct_total(pool):
     assert "main-deck-size" not in rules_of(issues)
 
 
-def test_main_deck_rejects_reserve_and_token_cards(pool):
+def test_main_deck_rejects_reserve_token_and_resource_cards(pool):
     deck = legal_deck()
     deck.main_deck += [
         DeckEntry(card_id="Weapon Three", count=1),
         DeckEntry(card_id="Battle Token", count=1),
+        DeckEntry(card_id="Rage", count=1),
     ]
     issues = validate_deck(deck, pool)
     assert any(
         i.rule == "main-deck-card-types"
-        and set(i.cards) == {"Weapon Three", "Battle Token"}
+        and set(i.cards) == {"Weapon Three", "Battle Token", "Rage"}
         for i in issues
     )
 

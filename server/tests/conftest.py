@@ -51,6 +51,7 @@ def pool() -> dict[str, Card]:
         card("Celestial Unit", faction="Celestial", rarity="Celestial"),
         card("Offfaction Unit", faction="Necromancer", rarity="Common"),
         card("Battle Token", card_type="Token"),
+        card("Rage", card_type="Resource"),
         # Non-units
         card("Common Spell", card_type="Spell", rarity="Common"),
         card("Merc Spell", card_type="Spell", faction="Mercenary", rarity="Common"),

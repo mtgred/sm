@@ -89,7 +89,10 @@ def create_player(user: dict, deck: dict, pool: dict[str, Card]) -> dict:
         "battleground": [],
         "equipment": [],  # at most one active Weapon and one active Armor
         "battlefield": None,
+        # Cards in the energy field carry faceUp/resting; energyPlays counts
+        # this turn's placements (upkeep resets it once turns pass).
         "energyField": [],
+        "energyPlays": 0,
         "reserve": [{"id": cid, "uid": str(uuid4())} for cid in deck["reserve_deck"]],
         "mulliganed": False,
         "prompts": [],
@@ -119,9 +122,10 @@ def create_game(seats: list[dict], pool: dict[str, Card]) -> dict:
     return state
 
 
-def mulligan(state: dict, player: dict, data) -> dict:
+def mulligan(state: dict, player: dict, data, pool=None) -> dict:
     """Resolve the player's one mulligan decision: `data` is the list of hand
-    uids to put on the bottom of the deck (empty keeps the hand)."""
+    uids to put on the bottom of the deck (empty keeps the hand). `pool` is
+    unused; it's part of the uniform game-action signature (see game.py)."""
     if state.get("phase") != "mulligan":
         return {"error": "The mulligan phase is over"}
     if player["mulliganed"]:

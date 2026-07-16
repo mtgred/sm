@@ -16,7 +16,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react"
 const RING_ID = "soulmasters"
 
 // -- API types (mirror of server/models.py serialization)
-type CardType = "Commander" | "Unit" | "Spell" | "Ability" | "Core" | "Reserve" | "Token"
+type CardType = "Commander" | "Unit" | "Spell" | "Ability" | "Core" | "Reserve" | "Token" | "Resource"
 
 interface Printing {
   card_number: string
@@ -132,7 +132,7 @@ const isFactionLegal = (commander: ApiCard, card: ApiCard, rules: Rules) =>
 // Legal to ever include with this commander (drives the typeahead pool);
 // quantity limits are enforced per-line instead.
 const isSelectable = (commander: ApiCard | undefined, card: ApiCard, rules: Rules) => {
-  if (card.card_type === "Commander" || card.card_type === "Token") return false
+  if (["Commander", "Token", "Resource"].includes(card.card_type)) return false
   if (!commander) return true
   if (card.specialization && card.specialization !== displayName(commander)) return false
   return isReserve(card) || isFactionLegal(commander, card, rules)
