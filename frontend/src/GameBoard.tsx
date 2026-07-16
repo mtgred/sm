@@ -249,10 +249,23 @@ const GameBoard: React.FC<GameBoardProps> = ({ id, session, emit, gamestate }) =
   // Artifact Core) an energy card picked to swap back to hand.
   const [playing, setPlaying] = useState<string | null>(null)
   const [swap, setSwap] = useState<string | null>(null)
+  // The detail of the last rejected action. The `game` emit only acks the
+  // sender when the server rejects (successful actions are broadcast as new
+  // state), so a stale error is cleared when fresh state arrives.
+  const [actionError, setActionError] = useState<string | null>(null)
+  useEffect(() => setActionError(null), [gamestate])
 
   if (!pool || !gamestate?.players?.length) return <div />
 
-  const send = (data: object) => emit("game", { method: "post", ringId: RING, path: `game/${id}`, data })
+  // fireball forwards this to POST /game/{id}, broadcasts the returned state to
+  // the channel on success, and acks us with { error: { detail } } on reject.
+  const send = (data: object) => {
+    setActionError(null)
+    emit("game", { method: "post", ringId: RING, path: `game/${id}`, data }, resp => {
+      const error = (resp as { error?: { detail?: string } }).error
+      if (error) setActionError(error.detail ?? "The action could not be completed.")
+    })
+  }
   const myIndex = gamestate.players.findIndex(player => player.user.username === session?.user?.username)
   // Spectators watch from seat 0's side of the table
   const bottom = myIndex >= 0 ? myIndex : 0
@@ -316,6 +329,17 @@ const GameBoard: React.FC<GameBoardProps> = ({ id, session, emit, gamestate }) =
 
         <div className="flex items-center gap-3 px-1">
           <span className="grow">{status}</span>
+          {actionError &&
+            <span className="flex items-center gap-2 bg-red-900 text-red-100 px-2 py-0.5 rounded">
+              {actionError}
+              <button
+                className="text-red-200/80 hover:text-red-100 leading-none"
+                title="Dismiss"
+                onClick={() => setActionError(null)}
+              >
+                ✕
+              </button>
+            </span>}
           {mulliganing &&
             <>
               <button disabled={returning.length === 0} onClick={() => confirmMulligan(returning)}>

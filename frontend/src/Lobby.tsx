@@ -52,17 +52,27 @@ const Lobby: React.FC<LobbyProps> = ({ games, session, emit }) => {
   const [casual, setCasual] = useState(false)
   const [decks, setDecks] = useState<DeckSummary[]>([])
   const [decksStatus, setDecksStatus] = useState<"loading" | "error" | "ready">("loading")
+  // The detail of the last rejected action (e.g. two players race for the
+  // last seat). fireball acks the sender on reject and broadcasts the updated
+  // list to everyone on success, so a fresh `games` prop clears a stale error.
+  const [actionError, setActionError] = useState<string | null>(null)
 
-  const send = (data: object) => emit("lobby", { method: "post", ringId: RING_ID, path: "games", data })
+  const send = (data: object) => {
+    setActionError(null)
+    emit("lobby", { method: "post", ringId: RING_ID, path: "games", data }, resp => {
+      const error = (resp as { error?: { detail?: string } }).error
+      if (error) setActionError(error.detail ?? "The action could not be completed.")
+    })
+  }
 
-  // On a rejected action (e.g. two players race for the last seat) fireball
-  // broadcasts the error body instead of a game list; keep the last good list.
   const gameList = Array.isArray(games) ? games : []
   const username = session?.user?.username
   const joinedGame = username
     ? gameList.find(game => game.players.some(player => player.username === username)) ?? null
     : null
   const me = joinedGame?.players.find(player => player.username === username)
+
+  useEffect(() => setActionError(null), [games])
 
   useEffect(() => {
     if (joinedGame?.id) {
@@ -101,6 +111,17 @@ const Lobby: React.FC<LobbyProps> = ({ games, session, emit }) => {
 
   return (
     <div className="p-4 flex flex-col h-full">
+      {actionError &&
+        <div className="mx-auto mb-3 w-[1096px] flex items-center gap-2 bg-red-900 text-red-100 px-3 py-1.5 rounded">
+          <span className="grow">{actionError}</span>
+          <button
+            className="text-red-200/80 hover:text-red-100 leading-none"
+            title="Dismiss"
+            onClick={() => setActionError(null)}
+          >
+            ✕
+          </button>
+        </div>}
       <div className="mx-auto grow pane rounded-lg overflow-hidden w-[1096px]">
         <div className="grow flex h-full">
           <div className="flex flex-col border-r border-gray-600 w-1/2">
