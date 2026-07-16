@@ -83,6 +83,28 @@ def play_energy(state: dict, player: dict, data, pool: dict[str, Card]) -> dict:
     return state
 
 
+def rest_energy(state: dict, player: dict, data, pool=None) -> dict:
+    """Rest chosen ready energy cards to pay a cost (rulebook pp. 12, 15, 17):
+    resting is how energy is spent, one 💠 per card. Allowed on either
+    player's turn — costs come up whenever something is cast, including
+    abilities on the opponent's turn — and the cards ready again in the
+    owner's upkeep. `data` is the list of energy uids to rest; `pool` is
+    unused, part of the uniform game-action signature."""
+    if state.get("phase") != "main":
+        return {"error": "Energy can only be rested while the game is in play"}
+    uids = data if isinstance(data, list) else []
+    field = {c["uid"]: c for c in player["energyField"]}
+    if not uids or len(set(uids)) != len(uids) or not set(uids) <= field.keys():
+        return {"error": "Those cards are not in your energy field"}
+    if any(field[uid].get("resting") for uid in uids):
+        return {"error": "Resting energy is already spent until your upkeep"}
+    for uid in uids:
+        field[uid]["resting"] = True
+    count = len(uids)
+    log(state, f"rests {count} energy card{'' if count == 1 else 's'}", player)
+    return state
+
+
 def ready_all(player: dict):
     """Upkeep readying (rulebook p. 14): every resting card turns upright —
     energy, battleground units, equipment, the battlefield and reserves."""

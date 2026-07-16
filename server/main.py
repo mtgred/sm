@@ -5,7 +5,7 @@ import uvicorn
 from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel, model_validator
 from .db import db
-from .game import end_turn, play_energy
+from .game import end_turn, play_energy, rest_energy
 from .game_setup import create_game, log, mulligan
 from .models import Card, DeckBase, ValidationIssue
 from .rules import rules_manifest
@@ -278,14 +278,15 @@ async def post_games(req: LobbyRequest):
 # Actions mutate the state dict in place (uprising-style) and return either
 # the state or {"error": ...}.
 
-GAME_ACTIONS = {"mulligan": mulligan, "energy": play_energy, "end": end_turn}
+GAME_ACTIONS = {"mulligan": mulligan, "energy": play_energy, "rest": rest_energy, "end": end_turn}
 
 
 class GameRequest(BaseModel):
-    action: Literal["mulligan", "energy", "end"]
+    action: Literal["mulligan", "energy", "rest", "end"]
     player: dict[str, str]
     # mulligan: hand uids to put back (empty list / omitted keeps the hand)
     # energy: {"uid": hand card, "faceUp"?: bool, "swap"?: energy uid to return}
+    # rest: ready energy uids to rest, paying that much 💠
     # end: no payload — passes the turn to the opponent (their upkeep + draw)
     data: list[str] | dict | None = None
 

@@ -7,9 +7,10 @@ import type { BoardCard, Card, ChatMessage, EmitFn, GameState, PlayerState, Prin
 // socket emits that fireball forwards to POST /game/{id} and broadcasts the
 // updated state back to everyone in the soulmasters/game/{id} channel.
 // Currently covers setup (zones, opening hands, the mulligan decision),
-// energy plays (face-down energy, face-up Artifact Cores and core swaps) and
-// the turn cycle: End turn passes to the opponent, whose upkeep readies their
-// cards and resets the per-turn energy allowance before they draw.
+// energy plays (face-down energy, face-up Artifact Cores and core swaps),
+// resting energy to pay costs (click ready energy, then confirm) and the turn
+// cycle: End turn passes to the opponent, whose upkeep readies their cards
+// and resets the per-turn energy allowance before they draw.
 
 const RING = "soulmasters"
 
@@ -161,12 +162,12 @@ interface PanelProps {
   flipped: boolean // opponent panel: hand row on top, zones below
   pool: CardPool
   mine?: boolean // the viewer owns this panel and may see face-down energy
-  swapUid?: string | null // energy card staged to swap back to hand
+  selectedEnergy?: string[] // energy cards staged to swap back to hand or to rest
   onEnergyClick?: (uid: string) => void
   children?: React.ReactNode // hand + reserve row (owner-dependent, passed in)
 }
 
-const PlayerPanel: React.FC<PanelProps> = ({ player, active, flipped, pool, mine, swapUid, onEnergyClick, children }) => {
+const PlayerPanel: React.FC<PanelProps> = ({ player, active, flipped, pool, mine, selectedEnergy, onEnergyClick, children }) => {
   const commanderId = player.commander.stages[player.commander.stage]
   return (
     <div className={`pane rounded-lg p-3 flex gap-3 ${flipped ? "flex-col-reverse" : "flex-col"}`}>
@@ -211,7 +212,7 @@ const PlayerPanel: React.FC<PanelProps> = ({ player, active, flipped, pool, mine
               card={card}
               mine={!!mine}
               pool={pool}
-              selected={card.uid === swapUid}
+              selected={selectedEnergy?.includes(card.uid)}
               onClick={onEnergyClick ? () => onEnergyClick(card.uid) : undefined}
             />)}
         </Zone>
@@ -249,11 +250,19 @@ const GameBoard: React.FC<GameBoardProps> = ({ id, session, emit, gamestate }) =
   // Artifact Core) an energy card picked to swap back to hand.
   const [playing, setPlaying] = useState<string | null>(null)
   const [swap, setSwap] = useState<string | null>(null)
+  // Ready energy cards staged to rest (paying a cost), confirmed as one action.
+  const [restUids, setRestUids] = useState<string[]>([])
   // The detail of the last rejected action. The `game` emit only acks the
   // sender when the server rejects (successful actions are broadcast as new
   // state), so a stale error is cleared when fresh state arrives.
   const [actionError, setActionError] = useState<string | null>(null)
-  useEffect(() => setActionError(null), [gamestate])
+  useEffect(() => {
+    setActionError(null)
+    // Fresh state may have rested or removed a staged card; drop it
+    setRestUids(uids =>
+      uids.filter(uid =>
+        gamestate?.players?.some(p => p.energyField.some(c => c.uid === uid && !c.resting))))
+  }, [gamestate])
 
   if (!pool || !gamestate?.players?.length) return <div />
 
@@ -292,6 +301,7 @@ const GameBoard: React.FC<GameBoardProps> = ({ id, session, emit, gamestate }) =
   const playingCore = !!playingCard && pool.cards.get(playingCard.id)?.type === "Core"
   const stageEnergy = (uid: string) => {
     setSwap(null)
+    setRestUids([])
     setPlaying(current => (current === uid ? null : uid))
   }
   const playEnergy = (faceUp: boolean) => {
@@ -299,9 +309,21 @@ const GameBoard: React.FC<GameBoardProps> = ({ id, session, emit, gamestate }) =
     setPlaying(null)
     setSwap(null)
   }
+  // Resting energy is how costs are paid (rulebook pp. 12, 15, 17) and is
+  // allowed on either player's turn; the server rejects already-resting cards.
+  const canRest = gamestate.phase === "main" && !!me
+  const toggleRest = (uid: string) => {
+    if (me?.energyField.some(card => card.uid === uid && !card.resting))
+      setRestUids(uids => (uids.includes(uid) ? uids.filter(u => u !== uid) : [...uids, uid]))
+  }
+  const restEnergy = () => {
+    send({ action: "rest", data: restUids })
+    setRestUids([])
+  }
   const endTurn = () => {
     setPlaying(null)
     setSwap(null)
+    setRestUids([])
     send({ action: "end" })
   }
 
@@ -358,6 +380,14 @@ const GameBoard: React.FC<GameBoardProps> = ({ id, session, emit, gamestate }) =
                 <button onClick={() => playEnergy(true)}>Play face up{swap ? " and swap" : ""}</button>}
               <button onClick={() => stageEnergy(playingCard.uid)}>Cancel</button>
             </>}
+          {restUids.length > 0 && !playingCard &&
+            <>
+              <span className="text-gray-400 whitespace-nowrap">Resting energy pays that much 💠</span>
+              <button onClick={restEnergy}>
+                Rest {restUids.length} energy
+              </button>
+              <button onClick={() => setRestUids([])}>Cancel</button>
+            </>}
           {myTurn && me && !playingCard &&
             <>
               {energyAllowance !== null &&
@@ -374,8 +404,14 @@ const GameBoard: React.FC<GameBoardProps> = ({ id, session, emit, gamestate }) =
           flipped={false}
           pool={pool}
           mine={!!me}
-          swapUid={swap}
-          onEnergyClick={playingCore ? uid => setSwap(current => (current === uid ? null : uid)) : undefined}
+          selectedEnergy={playingCore ? (swap ? [swap] : []) : restUids}
+          onEnergyClick={
+            playingCore
+              ? uid => setSwap(current => (current === uid ? null : uid))
+              : canRest
+                ? toggleRest
+                : undefined
+          }
         >
           <Zone label={`Hand (${gamestate.players[bottom].hand.length})`}>
             {me ? me.hand.map((card: BoardCard) =>

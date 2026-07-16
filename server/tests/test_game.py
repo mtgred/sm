@@ -10,7 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from .. import main
-from ..game import end_turn, play_energy
+from ..game import end_turn, play_energy, rest_energy
 from ..game_setup import create_game, mulligan
 from ..main import app
 from .test_game_setup import by_username, game_post, seat, started_game
@@ -129,6 +129,45 @@ def test_play_energy_guards(pool):
     assert "error" in play_energy(state, active, {"uid": core["uid"], "faceUp": True}, pool)
 
 
+# -- Resting energy to pay costs (rulebook pp. 12, 15, 17) ---------------------
+
+
+def test_rest_energy_rests_the_chosen_cards(pool):
+    state, active = main_phase_state(pool)
+    active["energyField"] = [energy(uid="e0"), energy(uid="e1"), energy(uid="e2")]
+    assert rest_energy(state, active, ["e0", "e2"], pool) is state
+    assert [c["resting"] for c in active["energyField"]] == [True, False, True]
+    assert state["log"][-1]["msg"] == "rests 2 energy cards"
+
+
+def test_rest_energy_is_allowed_on_the_opponents_turn(pool):
+    # paying for an ability cast in response happens off-turn
+    state, _ = main_phase_state(pool)
+    other = state["players"][1 - state["activePlayer"]]
+    other["energyField"] = [energy(uid="e0")]
+    assert "error" not in rest_energy(state, other, ["e0"], pool)
+    assert other["energyField"][0]["resting"] is True
+
+
+def test_rest_energy_rejects_already_resting_cards(pool):
+    state, active = main_phase_state(pool)
+    active["energyField"] = [energy(uid="ready"), energy(uid="rested", resting=True)]
+    assert "error" in rest_energy(state, active, ["ready", "rested"], pool)
+    # a rejected action never partially applies
+    assert active["energyField"][0]["resting"] is False
+
+
+def test_rest_energy_guards(pool):
+    state, active = main_phase_state(pool)
+    active["energyField"] = [energy(uid="e0")]
+    assert "error" in rest_energy(state, active, [], pool)
+    assert "error" in rest_energy(state, active, None, pool)
+    assert "error" in rest_energy(state, active, ["e0", "e0"], pool)
+    assert "error" in rest_energy(state, active, ["not-in-field"], pool)
+    state["phase"] = "mulligan"
+    assert "error" in rest_energy(state, active, ["e0"], pool)
+
+
 # -- End turn / upkeep (rulebook p. 14) ----------------------------------------
 
 
@@ -220,6 +259,30 @@ def test_game_energy_persists_and_returns_the_game(client, fake_db):
     assert played["energyPlays"] == 1
     stored = fake_db.games.find_one({"id": game["id"]})
     assert by_username(stored["state"], active["user"]["username"])["energyPlays"] == 1
+
+
+def test_game_rest_persists_until_upkeep(client, fake_db):
+    game = started_game(client, fake_db)
+    for player in (ALICE, BOB):
+        game_post(client, game["id"], "mulligan", player, [])
+    state = fake_db.games.find_one({"id": game["id"]})["state"]
+    active = state["players"][state["activePlayer"]]
+    uid = active["hand"][0]["uid"]
+    game_post(client, game["id"], "energy", active["user"], {"uid": uid})
+    resp = game_post(client, game["id"], "rest", active["user"], [uid])
+    assert resp.status_code == 200
+    rested = by_username(resp.json()["state"], active["user"]["username"])
+    assert rested["energyField"][0]["resting"] is True
+    # a repeat rest of the same card is rejected...
+    assert game_post(client, game["id"], "rest", active["user"], [uid]).status_code == 422
+    # ...until the card readies again in the player's next upkeep
+    other = fake_db.games.find_one({"id": game["id"]})["state"]["players"][
+        1 - state["activePlayer"]
+    ]
+    game_post(client, game["id"], "end", active["user"])
+    resp = game_post(client, game["id"], "end", other["user"])
+    readied = by_username(resp.json()["state"], active["user"]["username"])
+    assert readied["energyField"][0]["resting"] is False
 
 
 def test_game_end_turn_persists_the_pass(client, fake_db):

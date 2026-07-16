@@ -28,7 +28,7 @@ the board UI in `frontend/src/GameBoard.tsx`. Rule constants belong in
 
 The economic core: nothing else can be cast until costs can be paid.
 
-- [ ] **Rest energy to pay costs**: choose/rest N ready energy cards; energy
+- [x] **Rest energy to pay costs**: choose/rest N ready energy cards; energy
       readies in upkeep (ready-all already exists)
 - [ ] **Convert energy → resources**: pay the commander's conversion rate
       (`conversion_rate`, current evolution stage) to move 1 resource card
