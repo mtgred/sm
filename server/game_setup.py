@@ -160,5 +160,5 @@ def begin_first_turn(state: dict):
     state["activePlayer"] = state["firstPlayer"]
     player = state["players"][state["firstPlayer"]]
     drawn = draw(player, TURN_DRAW)
-    log(state, "Round 1 begins")
+    log(state, "Round 1")
     log(state, f"draws {drawn} cards", player)

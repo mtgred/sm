@@ -319,7 +319,7 @@ def end_turn(state: dict, player: dict, data=None, pool=None) -> dict:
     state["activePlayer"] = (state["activePlayer"] + 1) % len(state["players"])
     if state["activePlayer"] == state["firstPlayer"]:
         state["round"] += 1
-        log(state, f"Round {state['round']} begins")
+        log(state, f"Round {state['round']}")
 
     upkeep = state["players"][state["activePlayer"]]
     ready_all(upkeep)
