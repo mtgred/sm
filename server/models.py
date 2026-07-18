@@ -142,6 +142,15 @@ class Card(BaseModel):
         return None
 
     @property
+    def conversion_cost(self) -> int | None:
+        """Energy rested to generate 1 resource, parsed from the Studio
+        cell's "N:1" text (bottom left of the commander card, p. 12)."""
+        if self.conversion_rate is None:
+            return None
+        match = re.match(r"\s*(\d+)", self.conversion_rate)
+        return int(match.group(1)) if match else None
+
+    @property
     def reserve_type(self) -> ReserveType | None:
         if self.card_type == CardType.RESERVE and len(self.attributes) > 1:
             try:

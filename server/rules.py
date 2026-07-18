@@ -48,6 +48,8 @@ TURN_DRAW = 2  # cards drawn in each turn's Draw phase
 ENERGY_PLAYS_PER_TURN = 2  # cards placed into the energy field per turn...
 FIRST_TURN_ENERGY_PLAYS = 1  # ...but only 1 on the game's very first turn
 BATTLEGROUND_CAPACITY = 5  # units per player; nothing can exceed it (p. 18)
+RESERVE_CASTS_PER_ROUND = 1  # reserve cards cast per player per round (p. 9)
+RESERVE_UNLOCK_ROUND = 2  # no reserve casts until your second turn (p. 18)
 
 
 def rules_manifest() -> dict:
@@ -67,4 +69,6 @@ def rules_manifest() -> dict:
         "energyPlaysPerTurn": ENERGY_PLAYS_PER_TURN,
         "firstTurnEnergyPlays": FIRST_TURN_ENERGY_PLAYS,
         "battlegroundCapacity": BATTLEGROUND_CAPACITY,
+        "reserveCastsPerRound": RESERVE_CASTS_PER_ROUND,
+        "reserveUnlockRound": RESERVE_UNLOCK_ROUND,
     }

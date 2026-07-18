@@ -5,7 +5,7 @@ import uvicorn
 from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel, model_validator
 from .db import db
-from .game import cast_card, end_turn, play_energy, rest_energy
+from .game import cast_card, cast_reserve, convert_energy, end_turn, play_energy, rest_energy
 from .game_setup import create_game, log, mulligan
 from .models import Card, DeckBase, ValidationIssue
 from .rules import rules_manifest
@@ -282,18 +282,22 @@ GAME_ACTIONS = {
     "mulligan": mulligan,
     "energy": play_energy,
     "rest": rest_energy,
+    "convert": convert_energy,
     "cast": cast_card,
+    "reserve": cast_reserve,
     "end": end_turn,
 }
 
 
 class GameRequest(BaseModel):
-    action: Literal["mulligan", "energy", "rest", "cast", "end"]
+    action: Literal["mulligan", "energy", "rest", "convert", "cast", "reserve", "end"]
     player: dict[str, str]
     # mulligan: hand uids to put back (empty list / omitted keeps the hand)
     # energy: {"uid": hand card, "faceUp"?: bool, "swap"?: energy uid to return}
     # rest: ready energy uids to rest, paying that much 💠
+    # convert: energy uids to rest (= the conversion rate), generating 1 resource
     # cast: {"uid": hand card, "energy": energy uids to rest as its cost}
+    # reserve: {"uid": reserve card to cast, paid in resources}
     # end: no payload — passes the turn to the opponent (their upkeep + draw)
     data: list[str] | dict | None = None
 

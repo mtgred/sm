@@ -100,6 +100,8 @@ export interface PlayerState {
   energyField: BoardCard[]
   energyPlays: number // energy placed this turn (the server enforces the cap)
   reserve: BoardCard[]
+  reserveCasts?: number // reserve cards cast this round (absent in older games)
+  removed?: BoardCard[] // removed from the game (absent in older games)
   mulliganed: boolean
   prompts: unknown[]
 }

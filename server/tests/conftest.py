@@ -23,7 +23,9 @@ def pool() -> dict[str, Card]:
             mercenary_limit=2,
             core_energy=6,
             hp=10,
+            conversion_rate="3:1",
         ),
+        # Evol. 1's cells are unset in Studio: stage lookups fall back to Base
         card(
             "Keshi Savageclaw (Evol. 1)",
             card_type="Commander",
@@ -69,16 +71,16 @@ def pool() -> dict[str, Card]:
             specialization="Athena Stormkal",
         ),
         card("Energy Core", card_type="Core", faction="Universal", rarity="Common"),
-        # Reserve
-        reserve_card("Weapon One", "Weapon"),
-        reserve_card("Weapon Two", "Weapon"),
-        reserve_card("Weapon Three", "Weapon"),
-        reserve_card("Armor One", "Armor"),
+        # Reserve (Armor Two's cost is unset-in-Studio for the casting tests)
+        reserve_card("Weapon One", "Weapon", cost=1),
+        reserve_card("Weapon Two", "Weapon", cost=2),
+        reserve_card("Weapon Three", "Weapon", cost=1),
+        reserve_card("Armor One", "Armor", cost=1),
         reserve_card("Armor Two", "Armor"),
-        reserve_card("Battlefield One", "Battlefield"),
-        reserve_card("Battlefield Two", "Battlefield"),
-        reserve_card("Feat One", "Feat"),
-        reserve_card("Feat Two", "Feat"),
+        reserve_card("Battlefield One", "Battlefield", cost=1),
+        reserve_card("Battlefield Two", "Battlefield", cost=2),
+        reserve_card("Feat One", "Feat", cost=0),
+        reserve_card("Feat Two", "Feat", cost=1),
     ]
     return {c.id: c for c in cards}
 

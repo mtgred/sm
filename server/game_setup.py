@@ -94,6 +94,8 @@ def create_player(user: dict, deck: dict, pool: dict[str, Card]) -> dict:
         "energyField": [],
         "energyPlays": 0,
         "reserve": [{"id": cid, "uid": str(uuid4())} for cid in deck["reserve_deck"]],
+        "reserveCasts": 0,  # reserve cards cast this round (upkeep resets it)
+        "removed": [],  # removed from the game: replaced equipment, spent Feats
         "mulliganed": False,
         "prompts": [],
     }

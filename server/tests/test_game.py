@@ -1,16 +1,17 @@
-"""In-game action tests: energy plays / Artifact Cores (rulebook pp. 15-16)
-and the end-turn / upkeep cycle (p. 14).
+"""In-game action tests: energy plays / Artifact Cores (rulebook pp. 15-16),
+resources and reserve casting (pp. 9-10, 12, 18) and the end-turn / upkeep
+cycle (p. 14).
 
 Pure action tests run over the conftest card pool (Keshi Savageclaw (Base):
-Core Energy 6); the endpoint tests drive POST /game/{id} through the same
-fake database as the other game tests.
+Core Energy 6, conversion rate 3:1); the endpoint tests drive POST /game/{id}
+through the same fake database as the other game tests.
 """
 
 import pytest
 from fastapi.testclient import TestClient
 
 from .. import main
-from ..game import cast_card, end_turn, play_energy, rest_energy
+from ..game import cast_card, cast_reserve, convert_energy, end_turn, play_energy, rest_energy
 from ..game_setup import create_game, mulligan
 from ..main import app
 from .test_game_setup import by_username, game_post, seat, started_game
@@ -247,6 +248,166 @@ def test_cast_guards(pool):
     state["phase"] = "mulligan"
     card = hand_card(active, "Uncommon Unit")
     assert "error" in cast_card(state, active, {"uid": card["uid"]}, pool)
+
+
+# -- Converting energy into resources (rulebook p. 12) -------------------------
+
+
+def test_convert_energy_generates_a_resource(pool):
+    state, active = main_phase_state(pool)
+    active["energyField"] = [energy(uid=f"e{i}") for i in range(4)]
+    # Keshi Savageclaw (Base) converts at 3:1
+    assert convert_energy(state, active, ["e0", "e1", "e2"], pool) is state
+    assert [c["resting"] for c in active["energyField"]] == [True, True, True, False]
+    assert active["resourceDeck"] == 3 and active["resourceField"] == 1
+    assert state["log"][-1]["msg"] == "converts 3 energy into 1 Rage"
+
+
+def test_convert_is_allowed_on_the_opponents_turn(pool):
+    # "You can do this at any time, even during your upkeep."
+    state, _ = main_phase_state(pool)
+    other = state["players"][1 - state["activePlayer"]]
+    other["energyField"] = [energy(uid=f"e{i}") for i in range(3)]
+    assert "error" not in convert_energy(state, other, ["e0", "e1", "e2"], pool)
+    assert other["resourceField"] == 1
+
+
+def test_convert_requires_exactly_the_rate(pool):
+    state, active = main_phase_state(pool)
+    active["energyField"] = [energy(uid=f"e{i}") for i in range(4)]
+    for payment in ([], ["e0", "e1"], ["e0", "e1", "e2", "e3"]):
+        assert "error" in convert_energy(state, active, payment, pool)
+    # a rejected conversion never partially applies
+    assert not any(c["resting"] for c in active["energyField"])
+    assert active["resourceField"] == 0
+
+
+def test_convert_rejects_an_empty_resource_deck(pool):
+    state, active = main_phase_state(pool)
+    active["energyField"] = [energy(uid=f"e{i}") for i in range(3)]
+    active["resourceDeck"], active["resourceField"] = 0, 4
+    assert "error" in convert_energy(state, active, ["e0", "e1", "e2"], pool)
+    assert not any(c["resting"] for c in active["energyField"])
+
+
+def test_convert_rate_falls_back_through_stages(pool):
+    # Keshi Evol. 1's conversion cell is unset in Studio: Base's 3:1 applies
+    state, active = main_phase_state(pool)
+    active["commander"]["stage"] = 1
+    active["energyField"] = [energy(uid=f"e{i}") for i in range(3)]
+    assert "error" not in convert_energy(state, active, ["e0", "e1", "e2"], pool)
+
+
+def test_convert_guards(pool):
+    state, active = main_phase_state(pool)
+    active["energyField"] = [energy(uid="e0"), energy(uid="e1"), energy(uid="rested", resting=True)]
+    assert "error" in convert_energy(state, active, ["e0", "e1", "rested"], pool)
+    assert "error" in convert_energy(state, active, ["e0", "e1", "nope"], pool)
+    state["phase"] = "mulligan"
+    assert "error" in convert_energy(state, active, ["e0", "e1"], pool)
+
+
+# -- Casting reserve cards (rulebook pp. 9-10, 18) ------------------------------
+
+
+def reserve_uid(player: dict, card_id: str) -> str:
+    return next(c["uid"] for c in player["reserve"] if c["id"] == card_id)
+
+
+def reserve_ready(pool) -> tuple[dict, dict]:
+    """A game in round 2 where the active player can afford reserve casts."""
+    state, active = main_phase_state(pool)
+    state["round"] = 2
+    active["resourceDeck"], active["resourceField"] = 2, 2
+    return state, active
+
+
+def test_cast_reserve_weapon_spends_resources(pool):
+    state, active = reserve_ready(pool)
+    uid = reserve_uid(active, "Weapon One")  # cost 1
+    assert cast_reserve(state, active, {"uid": uid}, pool) is state
+    assert active["equipment"] == [
+        {"id": "Weapon One", "uid": uid, "slot": "Weapon", "resting": False}
+    ]
+    assert uid not in [c["uid"] for c in active["reserve"]]
+    # spent resources return to the resource deck
+    assert active["resourceField"] == 1 and active["resourceDeck"] == 3
+    assert active["reserveCasts"] == 1
+    assert state["log"][-1]["msg"] == "casts Weapon One from their reserve, spending 1 Rage"
+
+
+def test_cast_reserve_replaces_the_same_equipment_slot(pool):
+    state, active = reserve_ready(pool)
+    active["equipment"] = [
+        {"id": "Weapon One", "uid": "w1", "slot": "Weapon", "resting": False},
+        {"id": "Armor One", "uid": "a1", "slot": "Armor", "resting": False},
+    ]
+    uid = reserve_uid(active, "Weapon Two")  # cost 2
+    cast_reserve(state, active, {"uid": uid}, pool)
+    # the old weapon is Removed; the armor is untouched
+    assert [c["uid"] for c in active["equipment"]] == ["a1", uid]
+    assert active["removed"] == [{"id": "Weapon One", "uid": "w1"}]
+    assert state["log"][-1]["msg"].endswith("removing Weapon One from the game")
+
+
+def test_cast_reserve_battlefield_replaces_the_battlefield(pool):
+    state, active = reserve_ready(pool)
+    active["battlefield"] = {"id": "Battlefield Two", "uid": "b2", "resting": False}
+    uid = reserve_uid(active, "Battlefield One")
+    cast_reserve(state, active, {"uid": uid}, pool)
+    assert active["battlefield"]["uid"] == uid
+    assert active["removed"] == [{"id": "Battlefield Two", "uid": "b2"}]
+
+
+def test_cast_reserve_feat_resolves_then_is_removed(pool):
+    state, active = reserve_ready(pool)
+    uid = reserve_uid(active, "Feat One")  # cost 0
+    cast_reserve(state, active, {"uid": uid}, pool)
+    assert active["removed"] == [{"id": "Feat One", "uid": uid}]
+    assert active["equipment"] == [] and active["battlefield"] is None
+    assert state["log"][-1]["msg"] == "casts Feat One from their reserve"
+
+
+def test_cast_reserve_once_per_round(pool):
+    state, active = reserve_ready(pool)
+    cast_reserve(state, active, {"uid": reserve_uid(active, "Weapon One")}, pool)
+    result = cast_reserve(state, active, {"uid": reserve_uid(active, "Armor One")}, pool)
+    assert "error" in result
+    # ...until the counter resets in the player's upkeep
+    other = state["players"][1 - state["activePlayer"]]
+    end_turn(state, active, None, pool)
+    end_turn(state, other, None, pool)
+    assert active["reserveCasts"] == 0
+    assert "error" not in cast_reserve(state, active, {"uid": reserve_uid(active, "Armor One")}, pool)
+
+
+def test_cast_reserve_needs_enough_resources(pool):
+    state, active = reserve_ready(pool)
+    active["resourceField"] = 1
+    result = cast_reserve(state, active, {"uid": reserve_uid(active, "Weapon Two")}, pool)  # cost 2
+    assert "error" in result
+    # a rejected cast never partially applies
+    assert active["resourceField"] == 1 and active["reserveCasts"] == 0
+    assert "Weapon Two" in [c["id"] for c in active["reserve"]]
+
+
+def test_cast_reserve_locked_until_round_two(pool):
+    state, active = main_phase_state(pool)
+    active["resourceField"] = 2
+    assert "error" in cast_reserve(state, active, {"uid": reserve_uid(active, "Weapon One")}, pool)
+
+
+def test_cast_reserve_guards(pool):
+    state, active = reserve_ready(pool)
+    other = state["players"][1 - state["activePlayer"]]
+    other["resourceField"] = 2
+    theirs = reserve_uid(other, "Weapon One")
+    assert "error" in cast_reserve(state, other, {"uid": theirs}, pool)
+    assert "error" in cast_reserve(state, active, {"uid": "not-in-reserve"}, pool)
+    # a card whose cost cell is still unset in Studio can't be priced
+    assert "error" in cast_reserve(state, active, {"uid": reserve_uid(active, "Armor Two")}, pool)
+    state["phase"] = "mulligan"
+    assert "error" in cast_reserve(state, active, {"uid": reserve_uid(active, "Weapon One")}, pool)
 
 
 def test_upkeep_clears_summoning_sickness(pool):

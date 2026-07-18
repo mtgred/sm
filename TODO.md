@@ -30,10 +30,10 @@ The economic core: nothing else can be cast until costs can be paid.
 
 - [x] **Rest energy to pay costs**: choose/rest N ready energy cards; energy
       readies in upkeep (ready-all already exists)
-- [ ] **Convert energy → resources**: pay the commander's conversion rate
+- [x] **Convert energy → resources**: pay the commander's conversion rate
       (`conversion_rate`, current evolution stage) to move 1 resource card
       deck → field; allowed any time, even during upkeep
-- [ ] **Generate / spend resources**: move resource deck ↔ field counters;
+- [x] **Generate / spend resources**: move resource deck ↔ field counters;
       ignore generate instructions when the resource deck is empty (p. 12)
 - [x] **Cast a unit**: main phase, your turn only; rest energy = cost;
       battleground capacity 5; enters with summoning sickness (track
@@ -42,15 +42,15 @@ The economic core: nothing else can be cast until costs can be paid.
       (effects manual until the Milestone 4 skills engine)
 - [ ] **Cast an ability**: any time, including opponent's turn / in response
       (full timing comes with the stack in Milestone 3); resolve then discard
-- [ ] **Artifact Cores are never cast** — energy-field placement only (done)
-- [ ] **Cast reserve cards**: pay Resources (not energy) equal to cost; max 1
+- [x] **Artifact Cores are never cast** — energy-field placement only
+- [x] **Cast reserve cards**: pay Resources (not energy) equal to cost; max 1
       per round; not before your second turn; Weapon/Armor/Battlefield go to
       their zone and **Remove** the previous one of that type; Feats resolve
       then are Removed; reserve deck is browsable any time
-- [ ] Removed-from-game zone per player (for Remove effects)
-- [ ] Track per-round flags on the player: reserve cast used, once-per-round
-      skills (reset in upkeep)
-- [ ] UI: cast-from-hand flow (pick card → pick energy to rest or auto-rest →
+- [x] Removed-from-game zone per player (for Remove effects)
+- [x] Track per-round flags on the player: reserve cast used (reset in
+      upkeep); once-per-round skill flags come with the Milestone 4 engine
+- [x] UI: cast-from-hand flow (pick card → pick energy to rest or auto-rest →
       confirm), resource conversion button, reserve deck browser + cast,
       equipment/battlefield replacement, removed-zone display
 

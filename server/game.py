@@ -5,11 +5,13 @@ return {"error": ...} without touching anything.
 """
 
 from .game_setup import draw, log
-from .models import Card, CardType
+from .models import Card, CardType, ReserveType
 from .rules import (
     BATTLEGROUND_CAPACITY,
     ENERGY_PLAYS_PER_TURN,
     FIRST_TURN_ENERGY_PLAYS,
+    RESERVE_CASTS_PER_ROUND,
+    RESERVE_UNLOCK_ROUND,
     TURN_DRAW,
 )
 
@@ -123,6 +125,120 @@ def rest_energy(state: dict, player: dict, data, pool=None) -> dict:
     return state
 
 
+def generate_resources(player: dict, count: int) -> int:
+    """Generate resources (rulebook p. 12): move up to `count` resource cards
+    deck -> field. Generate instructions are ignored once the resource deck is
+    empty, so the return value is how many actually moved."""
+    moved = min(count, player["resourceDeck"])
+    player["resourceDeck"] -= moved
+    player["resourceField"] += moved
+    return moved
+
+
+def spend_resources(player: dict, count: int) -> bool:
+    """Pay `count` resources, returning them field -> deck (p. 12). False
+    (and nothing moves) when the player doesn't have that many."""
+    if player["resourceField"] < count:
+        return False
+    player["resourceField"] -= count
+    player["resourceDeck"] += count
+    return True
+
+
+def conversion_cost(player: dict, pool: dict[str, Card]) -> int | None:
+    """The commander's energy -> resource conversion rate, read like
+    energy_limit: current evolution stage first, falling back through earlier
+    stages when a stage's Studio cell is still unset."""
+    stages = player["commander"]["stages"][: player["commander"]["stage"] + 1]
+    for stage_id in reversed(stages):
+        card = pool.get(stage_id)
+        if card and card.conversion_cost is not None:
+            return card.conversion_cost
+    return None
+
+
+def convert_energy(state: dict, player: dict, data, pool: dict[str, Card]) -> dict:
+    """Convert energy into a resource (rulebook p. 12): rest ready energy
+    equal to the commander's conversion rate to generate 1 resource. Allowed
+    at any time, on either player's turn — even during upkeep — so like
+    rest_energy there is no turn check. `data` is the list of energy uids to
+    rest as the payment."""
+    if state.get("phase") != "main":
+        return {"error": "Energy can only be converted while the game is in play"}
+    cost = conversion_cost(player, pool)
+    if cost is None:
+        return {"error": "Your commander has no conversion rate in the card pool"}
+    if player["resourceDeck"] < 1:
+        return {"error": "Your resource deck is empty — no resources left to generate"}
+    payment, error = ready_energy(player, data)
+    if error:
+        return {"error": error}
+    if len(payment) != cost:
+        return {"error": f"Converting takes exactly {cost} energy for 1 {player['resource']}"}
+    for energy in payment:
+        energy["resting"] = True
+    generate_resources(player, 1)
+    log(state, f"converts {cost} energy into 1 {player['resource']}", player)
+    return state
+
+
+def cast_reserve(state: dict, player: dict, data, pool: dict[str, Card]) -> dict:
+    """Cast a reserve card (rulebook pp. 9-10, 18): paid in resources, not
+    energy; once per round; never before your second turn (both players'
+    second turns fall in round 2). A Weapon or Armor enters the equipment
+    area and Removes the previous one of its type, a Battlefield likewise
+    replaces the battlefield, and a Feat resolves (effects stay manual until
+    the skills engine lands) and is then Removed. `data` is {"uid": the
+    reserve card to cast}."""
+    if state.get("phase") != "main":
+        return {"error": "Reserve cards can only be cast in your main phase"}
+    if state["players"][state["activePlayer"]] is not player:
+        return {"error": "It is not your turn"}
+    if state["round"] < RESERVE_UNLOCK_ROUND:
+        return {"error": "Reserve cards can't be cast until your second turn"}
+    # .get: games started before the counter existed have no reserveCasts key
+    if player.get("reserveCasts", 0) >= RESERVE_CASTS_PER_ROUND:
+        return {"error": "You have already cast a reserve card this round"}
+    data = data if isinstance(data, dict) else {}
+
+    played = next((c for c in player["reserve"] if c["uid"] == data.get("uid")), None)
+    if not played:
+        return {"error": "That card is not in your reserve deck"}
+    card = pool.get(played["id"])
+    slot = card.reserve_type if card else None
+    if not slot:
+        return {"error": f"{played['id']} is not a typed reserve card in the card pool"}
+    if card.cost is None:
+        return {"error": f"{card.id} has no cost in the card pool"}
+    if not spend_resources(player, card.cost):
+        return {
+            "error": f"{card.id} costs {card.cost} {player['resource']}"
+            f" — you have {player['resourceField']}"
+        }
+
+    player["reserve"] = [c for c in player["reserve"] if c["uid"] != played["uid"]]
+    removed = player.setdefault("removed", [])
+    entry = {"id": played["id"], "uid": played["uid"], "slot": slot.value, "resting": False}
+    replaced = None
+    if slot == ReserveType.FEAT:
+        removed.append({"id": played["id"], "uid": played["uid"]})
+    elif slot == ReserveType.BATTLEFIELD:
+        replaced, player["battlefield"] = player["battlefield"], entry
+    else:  # Weapon / Armor share the equipment area, one active of each type
+        replaced = next((c for c in player["equipment"] if c.get("slot") == slot.value), None)
+        player["equipment"] = [c for c in player["equipment"] if c is not replaced] + [entry]
+    if replaced:
+        removed.append({"id": replaced["id"], "uid": replaced["uid"]})
+    player["reserveCasts"] = player.get("reserveCasts", 0) + 1
+
+    spent = f", spending {card.cost} {player['resource']}" if card.cost else ""
+    msg = f"casts {played['id']} from their reserve{spent}"
+    if replaced:
+        msg += f", removing {replaced['id']} from the game"
+    log(state, msg, player)
+    return state
+
+
 def cast_card(state: dict, player: dict, data, pool: dict[str, Card]) -> dict:
     """Cast a unit or spell from hand (rulebook pp. 17-18): pay its cost by
     resting exactly that many ready energy cards, then resolve. A unit joins
@@ -210,6 +326,7 @@ def end_turn(state: dict, player: dict, data=None, pool=None) -> dict:
     for card in upkeep["battleground"]:
         card["enteredThisRound"] = False  # summoning sickness wears off
     upkeep["energyPlays"] = 0
+    upkeep["reserveCasts"] = 0
     drawn = draw(upkeep, TURN_DRAW)
     log(state, f"draws {drawn} card{'' if drawn == 1 else 's'}", upkeep)
     if drawn < TURN_DRAW:

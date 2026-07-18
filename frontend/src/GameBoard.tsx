@@ -8,11 +8,13 @@ import type { BoardCard, Card, ChatMessage, EmitFn, GameState, PlayerState, Prin
 // updated state back to everyone in the soulmasters/game/{id} channel.
 // Currently covers setup (zones, opening hands, the mulligan decision),
 // energy plays (face-down energy, face-up Artifact Cores and core swaps),
-// resting energy to pay costs (click ready energy, then confirm), casting
-// units and spells from hand (pick the card, pick or auto-pick the energy to
-// rest as payment) and the turn cycle: End turn passes to the opponent, whose
-// upkeep readies their cards and resets the per-turn energy allowance before
-// they draw.
+// resting energy to pay costs (click ready energy, then confirm), converting
+// energy into resources at the commander's rate, casting units and spells
+// from hand (pick the card, pick or auto-pick the energy to rest as payment),
+// casting reserve cards (paid in resources; Weapon/Armor/Battlefield replace
+// and Remove, Feats resolve and are Removed) and the turn cycle: End turn
+// passes to the opponent, whose upkeep readies their cards and resets the
+// per-turn allowances before they draw.
 
 const RING = "soulmasters"
 
@@ -22,6 +24,8 @@ const RING = "soulmasters"
 interface TurnRules {
   energyPlaysPerTurn: number
   firstTurnEnergyPlays: number
+  reserveCastsPerRound: number
+  reserveUnlockRound: number
 }
 
 const useTurnRules = (): TurnRules | null => {
@@ -204,6 +208,10 @@ const PlayerPanel: React.FC<PanelProps> = ({ player, active, flipped, pool, mine
           {player.discard.length > 0 &&
             <CardView id={player.discard[player.discard.length - 1].id} pool={pool} />}
         </Zone>
+        <Zone label="Removed">
+          {!!player.removed?.length &&
+            <CardView id={player.removed[player.removed.length - 1].id} pool={pool} />}
+        </Zone>
       </div>
 
       <div className="flex gap-3">
@@ -254,6 +262,8 @@ const GameBoard: React.FC<GameBoardProps> = ({ id, session, emit, gamestate }) =
   const [swap, setSwap] = useState<string | null>(null)
   // Ready energy cards staged to rest (paying a cost), confirmed as one action.
   const [restUids, setRestUids] = useState<string[]>([])
+  // A reserve card staged to cast (paid in resources, not energy).
+  const [castingReserve, setCastingReserve] = useState<string | null>(null)
   // The detail of the last rejected action. The `game` emit only acks the
   // sender when the server rejects (successful actions are broadcast as new
   // state), so a stale error is cleared when fresh state arrives.
@@ -307,9 +317,20 @@ const GameBoard: React.FC<GameBoardProps> = ({ id, session, emit, gamestate }) =
   // priced (the server rejects it too).
   const castCost = playingData?.type === "Unit" || playingData?.type === "Spell" ? playingData.cost : null
   const readyEnergy = me ? me.energyField.filter(card => !card.resting).length : 0
+  // The commander's energy → resource conversion rate ("3:1" on the card),
+  // read from the current evolution stage and falling back through earlier
+  // stages when a Studio cell is unset (mirrors server/game.py conversion_cost).
+  let conversionCost: number | null = null
+  if (me) {
+    for (let stage = me.commander.stage; stage >= 0 && conversionCost == null; stage--) {
+      const match = pool.cards.get(me.commander.stages[stage])?.["conversion-rate"]?.match(/\d+/)
+      if (match) conversionCost = Number(match[0])
+    }
+  }
   const stageEnergy = (uid: string) => {
     setSwap(null)
     setRestUids([])
+    setCastingReserve(null)
     setPlaying(current => (current === uid ? null : uid))
   }
   const playEnergy = (faceUp: boolean) => {
@@ -342,10 +363,34 @@ const GameBoard: React.FC<GameBoardProps> = ({ id, session, emit, gamestate }) =
     send({ action: "rest", data: restUids })
     setRestUids([])
   }
+  // Converting rests energy like a cost, so it shares the rest staging: once
+  // exactly the rate is picked (and a resource is left to generate), the
+  // staged cards can be converted instead of plain-rested.
+  const convertEnergy = () => {
+    send({ action: "convert", data: restUids })
+    setRestUids([])
+  }
+  // Reserve casting: pick a reserve card, pay its cost in resources. The
+  // server enforces the once-per-round / round-2 limits; rules only gate the UI.
+  const reserveCard = myTurn ? me?.reserve.find(card => card.uid === castingReserve) : undefined
+  const reserveCost = reserveCard ? (pool.cards.get(reserveCard.id)?.cost ?? null) : null
+  const reserveLocked = !!rules && gamestate.round < rules.reserveUnlockRound
+  const reserveUsed = !!rules && (me?.reserveCasts ?? 0) >= rules.reserveCastsPerRound
+  const stageReserve = (uid: string) => {
+    setPlaying(null)
+    setSwap(null)
+    setRestUids([])
+    setCastingReserve(current => (current === uid ? null : uid))
+  }
+  const castReserve = () => {
+    send({ action: "reserve", data: { uid: castingReserve } })
+    setCastingReserve(null)
+  }
   const endTurn = () => {
     setPlaying(null)
     setSwap(null)
     setRestUids([])
+    setCastingReserve(null)
     send({ action: "end" })
   }
 
@@ -410,15 +455,38 @@ const GameBoard: React.FC<GameBoardProps> = ({ id, session, emit, gamestate }) =
                 <button onClick={() => playEnergy(true)}>Play face up{swap ? " and swap" : ""}</button>}
               <button onClick={() => stageEnergy(playingCard.uid)}>Cancel</button>
             </>}
-          {restUids.length > 0 && !playingCard &&
+          {reserveCard && me &&
+            <>
+              <span className="text-gray-400 whitespace-nowrap">
+                {reserveLocked
+                  ? `Reserve cards unlock in round ${rules?.reserveUnlockRound}`
+                  : reserveUsed
+                    ? "Reserve cast already used this round"
+                    : reserveCost != null
+                      ? `Costs ${reserveCost} ${me.resource} — you have ${me.resourceField}`
+                      : `${reserveCard.id} has no cost yet`}
+              </span>
+              <button
+                disabled={reserveLocked || reserveUsed || reserveCost == null || me.resourceField < reserveCost}
+                onClick={castReserve}
+              >
+                Cast from reserve
+              </button>
+              <button onClick={() => setCastingReserve(null)}>Cancel</button>
+            </>}
+          {restUids.length > 0 && !playingCard && me &&
             <>
               <span className="text-gray-400 whitespace-nowrap">Resting energy pays that much 💠</span>
+              {conversionCost != null && restUids.length === conversionCost && me.resourceDeck > 0 &&
+                <button onClick={convertEnergy} title={`Rest ${conversionCost} energy to generate 1 ${me.resource}`}>
+                  Convert into 1 {me.resource}
+                </button>}
               <button onClick={restEnergy}>
                 Rest {restUids.length} energy
               </button>
               <button onClick={() => setRestUids([])}>Cancel</button>
             </>}
-          {myTurn && me && !playingCard &&
+          {myTurn && me && !playingCard && !reserveCard &&
             <>
               {energyAllowance !== null &&
                 <span className="text-gray-400 whitespace-nowrap">
@@ -455,7 +523,14 @@ const GameBoard: React.FC<GameBoardProps> = ({ id, session, emit, gamestate }) =
               : gamestate.players[bottom].hand.length > 0 && <Pile count={gamestate.players[bottom].hand.length} />}
           </Zone>
           <Zone label={`Reserve (${gamestate.players[bottom].reserve.length})`}>
-            {me ? me.reserve.map(card => <CardView key={card.uid} id={card.id} pool={pool} />)
+            {me ? me.reserve.map(card =>
+              <CardView
+                key={card.uid}
+                id={card.id}
+                pool={pool}
+                selected={card.uid === castingReserve}
+                onClick={myTurn ? () => stageReserve(card.uid) : undefined}
+              />)
               : gamestate.players[bottom].reserve.length > 0 && <Pile count={gamestate.players[bottom].reserve.length} tone="orange" />}
           </Zone>
         </PlayerPanel>
