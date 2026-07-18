@@ -27,6 +27,16 @@ import type { BoardCard, Card, ChatMessage, EmitFn, GameState, PlayerState, Prin
 
 const RING = "soulmasters"
 
+// The physical card backs, emitted alongside the built module. Resolving them
+// through import.meta.url keeps the asset URLs relative to gameboard.js
+// wherever fireball mounts it, instead of pointing at the site root. The gold
+// back is every hidden card; the orange one matches the reserve pile's tone.
+const CARD_BACK = new URL("../assets/cardback.jpg", import.meta.url).href
+const RESERVE_BACK = new URL("../assets/reserve-cardback.jpg", import.meta.url).href
+// The playmat art tiled behind the whole board as a wallpaper. Resolved the
+// same way as the card backs so the URL stays relative to gameboard.js.
+const PLAYMAT = new URL("../assets/playmat.jpg", import.meta.url).href
+
 // The slice of GET /rules the board needs (see server/rules.py). Fetched
 // rather than hardcoded so the server stays the single source of truth; if
 // the fetch fails the buttons stay enabled and the server still enforces.
@@ -256,20 +266,22 @@ const Pile: React.FC<{
 }> = ({ count, label, tone = "gold", active, anchor, onClick }) => {
   const ref = usePulse(count)
   const { flip } = useBoard()
-  const face =
-    tone === "orange"
-      ? "border-orange-950 bg-gradient-to-br from-orange-700 to-orange-950"
-      : "border-amber-950 bg-gradient-to-br from-amber-600 to-amber-900"
+  const back = tone === "orange" ? RESERVE_BACK : CARD_BACK
+  const border = tone === "orange" ? "border-orange-950" : "border-amber-950"
   return (
     <div
       ref={anchor ? flip.anchor(anchor) : undefined}
-      className={`w-24 aspect-[5/7] relative rounded-md border shrink-0 ${face} ${count === 0 ? "opacity-25" : ""}
+      className={`w-24 aspect-[5/7] relative rounded-md border shrink-0 bg-cover bg-center ${border} ${count === 0 ? "opacity-25" : ""}
         ${active ? "outline-2 outline-sky-400" : ""} ${onClick ? "cursor-pointer" : ""}`}
-      style={count > 1 ? { boxShadow: "3px 3px 0 rgba(0,0,0,0.45), 6px 6px 0 rgba(0,0,0,0.25)" } : undefined}
+      style={{
+        backgroundImage: `url(${back})`,
+        ...(count > 1 ? { boxShadow: "3px 3px 0 rgba(0,0,0,0.45), 6px 6px 0 rgba(0,0,0,0.25)" } : {}),
+      }}
       onClick={onClick}
     >
-      <div ref={ref} className="absolute inset-0 flex items-center justify-center text-xl font-bold text-white/90">
-        {count}
+      {/* Count sits in a dark pill so it stays legible over the ornate art. */}
+      <div ref={ref} className="absolute inset-0 flex items-center justify-center">
+        <span className="rounded-full bg-black/70 px-2.5 py-0.5 text-xl font-bold text-white/95 shadow-md">{count}</span>
       </div>
       {/* Label overlaid at the bottom instead of below, saving vertical space;
           the dark translucent strip keeps it readable over the pile art. */}
@@ -327,7 +339,7 @@ const Region: React.FC<{
   className?: string
   children?: React.ReactNode
 }> = ({ label, grow, col, className = "", children }) => (
-  <div className={`relative rounded-lg bg-white/5 ${grow ? "grow min-w-0" : ""} ${className}`}>
+  <div className={`relative rounded-lg ${grow ? "grow min-w-0" : ""} ${className}`}>
     <span
       className={`absolute inset-0 flex items-center justify-center font-semibold uppercase tracking-[0.3em] text-[13px] text-white/10 pointer-events-none select-none ${
         col ? "[writing-mode:vertical-lr]" : ""
@@ -364,9 +376,10 @@ const EnergyCard: React.FC<EnergyCardProps> = ({ card, mine, selected, onClick }
     <div ref={flip(card.uid)} className={`shrink-0 transition-all duration-300 ${card.resting ? "rotate-90 mx-5" : ""}`}>
       {!card.faceUp ? (
         <div
-          className={`w-24 aspect-[5/7] rounded-md border border-amber-950 bg-gradient-to-br from-amber-600 to-amber-900 ${
+          className={`w-24 aspect-[5/7] rounded-md border border-amber-950 bg-cover bg-center ${
             selected ? "outline-2 outline-sky-400 z-20" : ""
           } ${mine && onClick ? "cursor-pointer hover:outline-2 hover:outline-orange-400" : ""}`}
+          style={{ backgroundImage: `url(${CARD_BACK})` }}
           title="Face-down energy"
           onClick={mine ? onClick : undefined}
           onMouseEnter={mine ? () => hover(card.id) : undefined}
@@ -395,7 +408,7 @@ const Mat: React.FC<MatProps> = ({ player, active, flipped, mine, selectedEnergy
   return (
     <div
       className={`grow basis-0 min-h-0 rounded-xl border p-2 flex gap-1 transition-all duration-500 ${
-        flipped ? "flex-col bg-gradient-to-b from-navy-900 to-navy-800" : "flex-col-reverse bg-gradient-to-b from-navy-800 to-navy-900"
+        flipped ? "flex-col" : "flex-col-reverse"
       } ${active ? "border-sky-400 shadow-[0_0_20px_rgba(56,140,255,0.25)]" : "border-white/10"}`}
     >
       <div className="flex items-center gap-2 px-1 shrink-0">
@@ -415,14 +428,14 @@ const Mat: React.FC<MatProps> = ({ player, active, flipped, mine, selectedEnergy
               <>
                 <div
                   ref={hpRef}
-                  className="absolute -bottom-2 -left-2 rounded-full bg-emerald-800 border-2 border-emerald-400/60 px-2 py-0.5 text-sm font-bold text-emerald-50 shadow-md whitespace-nowrap"
+                  className="absolute -bottom-2 -right-2 rounded-full bg-emerald-800 border-2 border-emerald-400/60 px-2 py-0.5 text-sm font-bold text-emerald-50 shadow-md whitespace-nowrap"
                   title={`Life: ${player.hp}/${player.maxHp}`}
                 >
                   ♥ {player.hp}
                 </div>
                 <div
                   ref={resourceRef}
-                  className="absolute -bottom-2 -right-2 rounded-full bg-sky-900 border-2 border-sky-400/60 px-2 py-0.5 text-sm font-bold text-sky-50 shadow-md whitespace-nowrap"
+                  className="absolute -bottom-2 -left-2 rounded-full bg-red-900 border-2 border-red-400/60 px-2 py-0.5 text-sm font-bold text-red-50 shadow-md whitespace-nowrap"
                   title={`${player.resource}: ${player.resourceField} in play, ${player.resourceDeck} left in the resource deck`}
                 >
                   {player.resourceField}/{player.resourceField + player.resourceDeck}
@@ -529,7 +542,8 @@ const HiddenHand: React.FC<{ cards: BoardCard[]; count: number; flip: FlipRegist
       <div
         key={card.uid || i}
         ref={card.uid ? flip(card.uid, spawnFrom) : undefined}
-        className="w-24 aspect-[5/7] shrink-0 rounded-md border border-amber-950 bg-gradient-to-br from-amber-600 to-amber-900"
+        className="w-24 aspect-[5/7] shrink-0 rounded-md border border-amber-950 bg-cover bg-center"
+        style={{ backgroundImage: `url(${CARD_BACK})` }}
       />
     ))}
     <HandLabel count={count} />
@@ -816,7 +830,12 @@ const GameBoard: React.FC<GameBoardProps> = ({ id, session, emit, gamestate }) =
 
   return (
     <BoardCtx.Provider value={{ pool, flip, hover: setPreview }}>
-      <div className="relative h-full min-h-0 flex gap-2 p-2 bg-navy-900">
+      <div
+        className="relative h-full min-h-0 flex gap-2 p-2 bg-navy-900 bg-cover bg-center bg-no-repeat"
+        // Darken the playmat with a translucent navy wash so the mats, cards
+        // and translucent regions layered on top stay readable over the art.
+        style={{ backgroundImage: `linear-gradient(rgba(10,14,26,0.82), rgba(10,14,26,0.82)), url(${PLAYMAT})` }}
+      >
         <div className="grow min-w-0 flex flex-col gap-2 overflow-y-auto">
           <EdgeRow
             player={opponent}
