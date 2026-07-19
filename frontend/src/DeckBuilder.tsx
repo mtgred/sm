@@ -801,7 +801,7 @@ const CardLookup: React.FC<{
         />
         <button type="submit" disabled={!pick}>Add to deck</button>
       </div>
-      {query.trim() && matches.length > 0 && !exact && (
+      {query.trim() && matches.length > 0 && !exact &&
         <div className="absolute left-0 right-28 top-full z-30 mt-1 rounded border bg-navy-900 shadow-xl">
           {matches.map((card, i) => (
             <div
@@ -817,10 +817,13 @@ const CardLookup: React.FC<{
                 {card.card_type}
                 {isReserve(card) && ` · ${reserveType(card)}`}
               </span>
+              {card.rarity &&
+                <span className="ml-2" style={{ color: rarityColor(card.rarity) }}>
+                  {card.rarity}
+                </span>}
             </div>
           ))}
-        </div>
-      )}
+        </div>}
     </form>
   )
 }
