@@ -4,6 +4,7 @@ from uuid import uuid4
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel, model_validator
+from .combat import declare_attack, intercept, pass_combat, play_shield
 from .db import db
 from .game import cast_card, cast_reserve, convert_energy, end_turn, play_energy, rest_energy
 from .game_setup import create_game, log, mulligan
@@ -285,12 +286,19 @@ GAME_ACTIONS = {
     "convert": convert_energy,
     "cast": cast_card,
     "reserve": cast_reserve,
+    "attack": declare_attack,
+    "shield": play_shield,
+    "intercept": intercept,
+    "pass": pass_combat,
     "end": end_turn,
 }
 
 
 class GameRequest(BaseModel):
-    action: Literal["mulligan", "energy", "rest", "convert", "cast", "reserve", "end"]
+    action: Literal[
+        "mulligan", "energy", "rest", "convert", "cast", "reserve",
+        "attack", "shield", "intercept", "pass", "end",
+    ]
     player: dict[str, str]
     # mulligan: hand uids to put back (empty list / omitted keeps the hand)
     # energy: {"uid": hand card, "faceUp"?: bool, "swap"?: energy uid to return}
@@ -298,6 +306,10 @@ class GameRequest(BaseModel):
     # convert: energy uids to rest (= the conversion rate), generating 1 resource
     # cast: {"uid": hand card, "energy": energy uids to rest as its cost}
     # reserve: {"uid": reserve card to cast, paid in resources}
+    # attack: {"attacker": unit uid or "commander", "target": enemy uid or "commander"}
+    # shield: {"uid": hand card to play as a damage shield}
+    # intercept: {"uid": your Intercept unit — rests and becomes the target}
+    # pass: no payload — pass on the current combat step
     # end: no payload — passes the turn to the opponent (their upkeep + draw)
     data: list[str] | dict | None = None
 

@@ -56,36 +56,42 @@ The economic core: nothing else can be cast until costs can be paid.
 
 ## Milestone 2 — Combat (pp. 21–24)
 
-- [ ] **Declare attack**: rest attacker (commander or unit); any number of
+- [x] **Declare attack**: rest attacker (commander or unit); any number of
       combats per turn, one attack at a time; combat as its own phase
       alternating freely with main phases
-- [ ] **Attack legality**: only resting units are attackable (commanders
+- [x] **Attack legality**: only resting units are attackable (commanders
       always); no attacking on the game's first turn; summoning sickness
       blocks attacking (unless Haste)
-- [ ] **Six combat steps** as explicit state (`combat` sub-state on the game):
+- [x] **Six combat steps** as explicit state (`combat` sub-state on the game):
       Declare → Pre-Defender (ON ATTACK triggers) → Defender (Intercept /
       redirect & negate window) → Post-Defender → Combat Damage → End of
-      Combat (END OF COMBAT + ON KO triggers)
-- [ ] **Attack damage**: attacker Atk to victim; commander victim loses HP;
+      Combat (END OF COMBAT + ON KO triggers). Declare and Combat Damage
+      resolve without input, so only the four windows exist as `step` values;
+      triggers stay manual until the Milestone 4 engine
+- [x] **Attack damage**: attacker Atk to victim; commander victim loses HP;
       unit victim KO'd iff damage ≥ Health (damage never accumulates)
-- [ ] **Damage shields** (p. 23): play hand cards as shields up to the
+- [x] **Damage shields** (p. 23): play hand cards as shields up to the
       victim's Shield Capacity *per damage instance*; shield Shield Power
-      each, then discard; announce the damage source
-- [ ] **Conjure**: commander generates N resources as it attacks (not a
+      each, then discard (source announcement waits for multi-source damage
+      in Milestone 3 — attack damage is the only source today)
+- [x] **Conjure**: commander generates N resources as it attacks (not a
       trigger; not optional)
-- [ ] **KO handling**: unit → discard pile; distinguish KO vs Destroy vs
-      Sacrifice vs Remove (only KO fires ON KO)
-- [ ] **Commander HP & evolution** (p. 11): at 0 HP evolve to next stage
+- [x] **KO handling**: unit → discard pile (`combat.ko_unit`, the only
+      departure that will fire ON KO); Destroy / Sacrifice / Remove arrive
+      with the effects that cause them
+- [x] **Commander HP & evolution** (p. 11): at 0 HP evolve to next stage
       (reset HP to new max, excess damage dropped, draw 1, generate 1
-      resource); no stages left → lose; heals capped at max HP
-- [ ] **Combat keywords**: Armor (flat damage reduction, works on
+      resource); no stages left → lose (heal capping lands with the first
+      heal effect in Milestone 4)
+- [x] **Combat keywords**: Armor (flat damage reduction, works on
       unpreventable), Duelist, Haste, Heavy, Initiative, Intercept (redirect =
       new damage instance), Piercing N (ignores first N shield), Riposte,
       Scout, Stealth (ignore Taunt; blocks Intercept), Taunt (only while
-      resting)
-- [ ] UI: attack declaration (drag/click attacker → target), combat-step
+      resting). Parsed from rules text (`Card.keyword_value`); only the
+      combatant's own printed keywords count until the skills engine
+- [x] UI: attack declaration (click attacker → target), combat-step
       indicator, shield-play prompt, damage/KO animation, HP + evolution
-      display, resting rotation on battleground cards
+      display, resting rotation on battleground cards and commanders
 
 ## Milestone 3 — Priority, the stack & responses (pp. 18, 25–26)
 

@@ -16,16 +16,21 @@ from .rules import (
 )
 
 
-def energy_limit(player: dict, pool: dict[str, Card]) -> int:
-    """The commander's Core Energy — the energy field's size cap. Read from
-    the current evolution stage, falling back through earlier stages when a
-    stage's cell is still unset in Studio."""
+def stage_stat(player: dict, pool: dict[str, Card], attr: str):
+    """A commander stat (a Card field or property) read from the current
+    evolution stage, falling back through earlier stages when a stage's cell
+    is still unset in Studio."""
     stages = player["commander"]["stages"][: player["commander"]["stage"] + 1]
     for stage_id in reversed(stages):
         card = pool.get(stage_id)
-        if card and card.core_energy is not None:
-            return card.core_energy
-    return 0
+        if card and (value := getattr(card, attr)) is not None:
+            return value
+    return None
+
+
+def energy_limit(player: dict, pool: dict[str, Card]) -> int:
+    """The commander's Core Energy — the energy field's size cap."""
+    return stage_stat(player, pool, "core_energy") or 0
 
 
 def play_energy(state: dict, player: dict, data, pool: dict[str, Card]) -> dict:
@@ -110,11 +115,11 @@ def ready_energy(player: dict, uids) -> tuple[list[dict], str | None]:
 def rest_energy(state: dict, player: dict, data, pool=None) -> dict:
     """Rest chosen ready energy cards to pay a cost (rulebook pp. 12, 15, 17):
     resting is how energy is spent, one 💠 per card. Allowed on either
-    player's turn — costs come up whenever something is cast, including
-    abilities on the opponent's turn — and the cards ready again in the
-    owner's upkeep. `data` is the list of energy uids to rest; `pool` is
+    player's turn and mid-combat — costs come up whenever something is cast,
+    including abilities on the opponent's turn — and the cards ready again in
+    the owner's upkeep. `data` is the list of energy uids to rest; `pool` is
     unused, part of the uniform game-action signature."""
-    if state.get("phase") != "main":
+    if state.get("phase") not in ("main", "combat"):
         return {"error": "Energy can only be rested while the game is in play"}
     cards, error = ready_energy(player, data)
     if error or not cards:
@@ -146,24 +151,17 @@ def spend_resources(player: dict, count: int) -> bool:
 
 
 def conversion_cost(player: dict, pool: dict[str, Card]) -> int | None:
-    """The commander's energy -> resource conversion rate, read like
-    energy_limit: current evolution stage first, falling back through earlier
-    stages when a stage's Studio cell is still unset."""
-    stages = player["commander"]["stages"][: player["commander"]["stage"] + 1]
-    for stage_id in reversed(stages):
-        card = pool.get(stage_id)
-        if card and card.conversion_cost is not None:
-            return card.conversion_cost
-    return None
+    """The commander's energy -> resource conversion rate."""
+    return stage_stat(player, pool, "conversion_cost")
 
 
 def convert_energy(state: dict, player: dict, data, pool: dict[str, Card]) -> dict:
     """Convert energy into a resource (rulebook p. 12): rest ready energy
     equal to the commander's conversion rate to generate 1 resource. Allowed
-    at any time, on either player's turn — even during upkeep — so like
-    rest_energy there is no turn check. `data` is the list of energy uids to
-    rest as the payment."""
-    if state.get("phase") != "main":
+    at any time, on either player's turn — even during upkeep or combat — so
+    like rest_energy there is no turn check. `data` is the list of energy
+    uids to rest as the payment."""
+    if state.get("phase") not in ("main", "combat"):
         return {"error": "Energy can only be converted while the game is in play"}
     cost = conversion_cost(player, pool)
     if cost is None:
@@ -294,13 +292,15 @@ def cast_card(state: dict, player: dict, data, pool: dict[str, Card]) -> dict:
 
 def ready_all(player: dict):
     """Upkeep readying (rulebook p. 14): every resting card turns upright —
-    energy, battleground units, equipment, the battlefield and reserves."""
+    the commander, energy, battleground units, equipment, the battlefield
+    and reserves."""
     battlefield = [player["battlefield"]] if player["battlefield"] else []
     zones = [player["energyField"], player["battleground"], player["equipment"],
              player["reserve"], battlefield]
     for zone in zones:
         for card in zone:
             card["resting"] = False
+    player["commander"]["resting"] = False
 
 
 def end_turn(state: dict, player: dict, data=None, pool=None) -> dict:

@@ -12,9 +12,11 @@ import type { BoardCard, Card, ChatMessage, EmitFn, GameState, PlayerState, Prin
 // energy into resources at the commander's rate, casting units and spells
 // from hand (pick the card, pick or auto-pick the energy to rest as payment),
 // casting reserve cards (paid in resources; Weapon/Armor/Battlefield replace
-// and Remove, Feats resolve and are Removed) and the turn cycle: End turn
-// passes to the opponent, whose upkeep readies their cards and resets the
-// per-turn allowances before they draw.
+// and Remove, Feats resolve and are Removed), combat (declare an attacker and
+// target, step through the response windows, play damage shields, Intercept,
+// automatic damage/KO/evolution resolution on the server) and the turn cycle:
+// End turn passes to the opponent, whose upkeep readies their cards and
+// resets the per-turn allowances before they draw.
 //
 // The table is laid out like a physical playmat (one per player, opponent's
 // flipped): equipment on the left, commander with HP/resource badges, the
@@ -45,6 +47,7 @@ interface TurnRules {
   firstTurnEnergyPlays: number
   reserveCastsPerRound: number
   reserveUnlockRound: number
+  attackUnlockRound: number
 }
 
 const useTurnRules = (): TurnRules | null => {
@@ -398,10 +401,30 @@ interface MatProps {
   mine?: boolean // the viewer owns this mat and may see face-down energy
   selectedEnergy?: string[] // energy cards staged to swap back to hand or to rest
   onEnergyClick?: (uid: string) => void
+  attackerSel?: string | null // staged or declared attacker on this mat: unit uid or "commander"
+  targetSel?: string | null // the combat target on this mat: unit uid or "commander"
+  onUnitClick?: (uid: string) => void // stage an attacker / pick a target / intercept
+  onCommanderClick?: () => void
 }
 
-const Mat: React.FC<MatProps> = ({ player, active, flipped, mine, selectedEnergy, onEnergyClick }) => {
-  const { pool } = useBoard()
+// Red overlay marking the card the current attack is aimed at.
+const TargetMark: React.FC = () => (
+  <div className="absolute inset-0 rounded-md outline-2 outline-red-500 pointer-events-none" title="Attack target" />
+)
+
+const Mat: React.FC<MatProps> = ({
+  player,
+  active,
+  flipped,
+  mine,
+  selectedEnergy,
+  onEnergyClick,
+  attackerSel,
+  targetSel,
+  onUnitClick,
+  onCommanderClick,
+}) => {
+  const { pool, flip } = useBoard()
   const commanderId = player.commander.stages[player.commander.stage]
   const hpRef = usePulse(player.hp)
   const resourceRef = usePulse(player.resourceField)
@@ -421,28 +444,35 @@ const Mat: React.FC<MatProps> = ({ player, active, flipped, mine, selectedEnergy
         </Region>
 
         <div className="flex flex-col justify-center shrink-0 px-1">
-          <CardView
-            id={commanderId}
-
-            badges={
-              <>
-                <div
-                  ref={hpRef}
-                  className="absolute -bottom-2 -right-2 rounded-full bg-emerald-800 border-2 border-emerald-400/60 px-2 py-0.5 text-sm font-bold text-emerald-50 shadow-md whitespace-nowrap"
-                  title={`Life: ${player.hp}/${player.maxHp}`}
-                >
-                  ♥ {player.hp}
-                </div>
-                <div
-                  ref={resourceRef}
-                  className="absolute -bottom-2 -left-2 rounded-full bg-red-900 border-2 border-red-400/60 px-2 py-0.5 text-sm font-bold text-red-50 shadow-md whitespace-nowrap"
-                  title={`${player.resource}: ${player.resourceField} in play, ${player.resourceDeck} left in the resource deck`}
-                >
-                  {player.resourceField}/{player.resourceField + player.resourceDeck}
-                </div>
-              </>
-            }
-          />
+          {/* Resting (after attacking) rotates the commander like an energy
+              card; the FLIP-free wrapper carries the rotation so the badges
+              turn with the physical card. */}
+          <div className={`transition-all duration-300 ${player.commander.resting ? "rotate-90" : ""}`}>
+            <CardView
+              id={commanderId}
+              selected={attackerSel === "commander"}
+              onClick={onCommanderClick}
+              badges={
+                <>
+                  <div
+                    ref={hpRef}
+                    className="absolute -bottom-2 -right-2 rounded-full bg-emerald-800 border-2 border-emerald-400/60 px-2 py-0.5 text-sm font-bold text-emerald-50 shadow-md whitespace-nowrap"
+                    title={`Life: ${player.hp}/${player.maxHp}`}
+                  >
+                    ♥ {player.hp}
+                  </div>
+                  <div
+                    ref={resourceRef}
+                    className="absolute -bottom-2 -left-2 rounded-full bg-red-900 border-2 border-red-400/60 px-2 py-0.5 text-sm font-bold text-red-50 shadow-md whitespace-nowrap"
+                    title={`${player.resource}: ${player.resourceField} in play, ${player.resourceDeck} left in the resource deck`}
+                  >
+                    {player.resourceField}/{player.resourceField + player.resourceDeck}
+                  </div>
+                  {targetSel === "commander" && <TargetMark />}
+                </>
+              }
+            />
+          </div>
         </div>
 
         <div className={`grow min-w-0 flex gap-2 ${flipped ? "flex-col-reverse" : "flex-col"}`}>
@@ -465,26 +495,40 @@ const Mat: React.FC<MatProps> = ({ player, active, flipped, mine, selectedEnergy
             {player.battleground.map(card => {
               const data = pool.cards.get(card.id)
               return (
-                <CardView
+                // The wrapper carries the FLIP ref and the resting rotation
+                // (mirroring EnergyCard) so travel and rotation don't fight.
+                <div
                   key={card.uid}
-                  uid={card.uid}
-                  id={card.id}
-                  badges={
-                    <>
-                      {data?.attack != null && (
-                        <div className="absolute top-1 right-1 rounded-full bg-sky-900 border border-sky-400/60 px-1.5 text-xs font-bold text-sky-50">
-                          {data.attack}
-                        </div>
-                      )}
-                      {card.enteredThisRound && (
-                        <div
-                          className="absolute inset-0 rounded-md outline-2 outline-orange-400 pointer-events-none"
-                          title="Entered this round"
-                        />
-                      )}
-                    </>
-                  }
-                />
+                  ref={flip(card.uid)}
+                  className={`shrink-0 transition-all duration-300 ${card.resting ? "rotate-90 mx-5" : ""}`}
+                >
+                  <CardView
+                    id={card.id}
+                    selected={attackerSel === card.uid}
+                    onClick={onUnitClick ? () => onUnitClick(card.uid) : undefined}
+                    badges={
+                      <>
+                        {data?.attack != null && (
+                          <div className="absolute top-1 right-1 rounded-full bg-sky-900 border border-sky-400/60 px-1.5 text-xs font-bold text-sky-50">
+                            {data.attack}
+                          </div>
+                        )}
+                        {data?.health != null && (
+                          <div className="absolute bottom-1 right-1 rounded-full bg-emerald-900 border border-emerald-400/60 px-1.5 text-xs font-bold text-emerald-50">
+                            {data.health}
+                          </div>
+                        )}
+                        {card.enteredThisRound && (
+                          <div
+                            className="absolute inset-0 rounded-md outline-2 outline-orange-400 pointer-events-none"
+                            title="Entered this round"
+                          />
+                        )}
+                        {targetSel === card.uid && <TargetMark />}
+                      </>
+                    }
+                  />
+                </div>
               )
             })}
           </Region>
@@ -665,6 +709,10 @@ const GameBoard: React.FC<GameBoardProps> = ({ id, session, emit, gamestate }) =
   const [restUids, setRestUids] = useState<string[]>([])
   // A reserve card staged to cast (paid in resources, not energy).
   const [castingReserve, setCastingReserve] = useState<string | null>(null)
+  // An attacker staged for a combat declaration: unit uid or "commander".
+  const [attacker, setAttacker] = useState<string | null>(null)
+  // A hand card staged to play as a damage shield during combat.
+  const [shielding, setShielding] = useState<string | null>(null)
   // Whether the viewer's reserve tray (opened from the reserve pile) is shown.
   const [reserveOpen, setReserveOpen] = useState(false)
   // The detail of the last rejected action. The `game` emit only acks the
@@ -677,6 +725,8 @@ const GameBoard: React.FC<GameBoardProps> = ({ id, session, emit, gamestate }) =
     setRestUids(uids =>
       uids.filter(uid =>
         gamestate?.players?.some(p => p.energyField.some(c => c.uid === uid && !c.resting))))
+    // A staged shield leaves the hand once the server accepts it
+    setShielding(null)
   }, [gamestate])
 
   // Flash a banner when the active player changes, so passing the turn is
@@ -686,7 +736,9 @@ const GameBoard: React.FC<GameBoardProps> = ({ id, session, emit, gamestate }) =
   const bannerTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
   const prevActive = useRef<number | null | undefined>(undefined)
   useEffect(() => {
-    const active = gamestate?.phase === "main" ? gamestate.activePlayer : null
+    // Combat keeps the same player's turn going, so it must not re-trigger
+    // the banner when the phase flips back to main.
+    const active = ["main", "combat"].includes(gamestate?.phase) ? gamestate.activePlayer : null
     const changed = prevActive.current !== undefined && active != null && active !== prevActive.current
     prevActive.current = active
     if (!changed || active == null) return
@@ -776,8 +828,9 @@ const GameBoard: React.FC<GameBoardProps> = ({ id, session, emit, gamestate }) =
     setRestUids([])
   }
   // Resting energy is how costs are paid (rulebook pp. 12, 15, 17) and is
-  // allowed on either player's turn; the server rejects already-resting cards.
-  const canRest = gamestate.phase === "main" && !!me
+  // allowed on either player's turn, mid-combat included; the server rejects
+  // already-resting cards.
+  const canRest = ["main", "combat"].includes(gamestate.phase) && !!me
   const toggleRest = (uid: string) => {
     if (me?.energyField.some(card => card.uid === uid && !card.resting))
       setRestUids(uids => (uids.includes(uid) ? uids.filter(u => u !== uid) : [...uids, uid]))
@@ -815,8 +868,66 @@ const GameBoard: React.FC<GameBoardProps> = ({ id, session, emit, gamestate }) =
     setSwap(null)
     setRestUids([])
     setCastingReserve(null)
+    setAttacker(null)
     send({ action: "end" })
   }
+
+  // -- Combat (rulebook pp. 21-24) --------------------------------------------
+  // Declaring: stage one of your ready cards as the attacker, then click an
+  // enemy unit or their commander. The server owns legality (round 1 lockout,
+  // summoning sickness, resting targets, Taunt...) and resolves the damage;
+  // the client steps through the response windows and plays shields.
+  const combat = gamestate.combat ?? null
+  const defenderIdx = combat ? gamestate.players.length - 1 - combat.attackingPlayer : -1
+  const iAmDefender = combat != null && myIndex >= 0 && myIndex === defenderIdx
+  const shieldStep = combat?.step === "preDefender" || combat?.step === "postDefender"
+  const stepLabels: Record<string, string> = {
+    preDefender: "Pre-Defender",
+    defender: "Defender",
+    postDefender: "Post-Defender",
+    endOfCombat: "End of Combat",
+  }
+  const combatantName = (idx: number, uid: string) => {
+    const seat = gamestate.players[idx]
+    if (uid === "commander") return seat.commander.stages[seat.commander.stage]
+    return seat.battleground.find(card => card.uid === uid)?.id ?? "a unit"
+  }
+  // The victim's Shield Capacity caps shields per damage instance; commander
+  // stats fall back through evolution stages like the conversion rate does.
+  let shieldCapacity = 0
+  if (combat) {
+    const victimSeat = gamestate.players[defenderIdx]
+    if (combat.target === "commander") {
+      for (let stage = victimSeat.commander.stage; stage >= 0 && !shieldCapacity; stage--) {
+        shieldCapacity = pool.cards.get(victimSeat.commander.stages[stage])?.["shield-capacity"] ?? 0
+      }
+    } else {
+      const victim = victimSeat.battleground.find(card => card.uid === combat.target)
+      shieldCapacity = victim ? (pool.cards.get(victim.id)?.["shield-capacity"] ?? 0) : 0
+    }
+  }
+  const shieldCard = shielding ? me?.hand.find(card => card.uid === shielding) : undefined
+  const canPass =
+    combat != null && myIndex >= 0 &&
+    (combat.step === "defender" ? iAmDefender : !combat.passed.includes(myIndex))
+  const canAttack = myTurn && (!rules || gamestate.round >= rules.attackUnlockRound)
+  const stageAttacker = (uid: string) => {
+    setPlaying(null)
+    setSwap(null)
+    setRestUids([])
+    setCastingReserve(null)
+    setAttacker(current => (current === uid ? null : uid))
+  }
+  const declareAttack = (target: string) => {
+    send({ action: "attack", data: { attacker, target } })
+    setAttacker(null)
+  }
+  const passCombat = () => send({ action: "pass" })
+  const playShield = () => {
+    send({ action: "shield", data: { uid: shielding } })
+    setShielding(null)
+  }
+  const interceptWith = (uid: string) => send({ action: "intercept", data: { uid } })
 
   const status = gamestate.phase === "over"
     ? gamestate.winner != null
@@ -844,7 +955,15 @@ const GameBoard: React.FC<GameBoardProps> = ({ id, session, emit, gamestate }) =
             flipped
           />
 
-          <Mat player={opponent} active={gamestate.activePlayer === top} flipped />
+          <Mat
+            player={opponent}
+            active={gamestate.activePlayer === top}
+            flipped
+            attackerSel={combat && combat.attackingPlayer === top ? combat.attacker : null}
+            targetSel={combat && defenderIdx === top ? combat.target : null}
+            onUnitClick={!combat && attacker && myTurn ? uid => declareAttack(uid) : undefined}
+            onCommanderClick={!combat && attacker && myTurn ? () => declareAttack("commander") : undefined}
+          />
 
           {/* The prompt bar: status plus whatever action is currently staged. */}
           <div className="self-center z-20 shrink-0 max-w-full flex flex-wrap items-center justify-center gap-2 rounded-full border border-white/10 bg-black/80 px-4 py-1.5 shadow-xl">
@@ -906,6 +1025,45 @@ const GameBoard: React.FC<GameBoardProps> = ({ id, session, emit, gamestate }) =
                 </button>
                 <button className="sm" onClick={() => setCastingReserve(null)}>Cancel</button>
               </>}
+            {attacker && myTurn && !combat &&
+              <>
+                <span className="text-gray-400 whitespace-nowrap">
+                  Attacking with {combatantName(myIndex, attacker)} — click an enemy unit or their commander
+                </span>
+                <button className="sm" onClick={() => setAttacker(null)}>Cancel</button>
+              </>}
+            {combat &&
+              <>
+                <span className="whitespace-nowrap text-amber-300">
+                  ⚔ {combatantName(combat.attackingPlayer, combat.attacker)} →{" "}
+                  {combatantName(defenderIdx, combat.target)} — {stepLabels[combat.step] ?? combat.step}
+                </span>
+                {iAmDefender && shieldStep && !shielding &&
+                  <span className="text-gray-400 whitespace-nowrap">
+                    Shields {combat.shields.length}/{shieldCapacity} — click a hand card to play it as a shield
+                  </span>}
+                {shieldCard &&
+                  <>
+                    <span className="text-gray-400 whitespace-nowrap">
+                      {shieldCard.id} blocks {pool.cards.get(shieldCard.id)?.["shield-power"] ?? 0} damage
+                    </span>
+                    <button className="sm" onClick={playShield}>Play as shield</button>
+                    <button className="sm" onClick={() => setShielding(null)}>Cancel</button>
+                  </>}
+                {iAmDefender && combat.step === "defender" &&
+                  <span className="text-gray-400 whitespace-nowrap">
+                    Click a ready unit with Intercept to redirect the attack
+                  </span>}
+                {canPass
+                  ? <button className="sm" onClick={passCombat}>
+                      {combat.step === "postDefender"
+                        ? "Continue to damage"
+                        : combat.step === "endOfCombat"
+                          ? "End combat"
+                          : "Continue"}
+                    </button>
+                  : myIndex >= 0 && <span className="text-gray-400 whitespace-nowrap">Waiting for the opponent…</span>}
+              </>}
             {restUids.length > 0 && !playingCard && me &&
               <>
                 <span className="text-gray-400 whitespace-nowrap">Resting energy pays that much 💠</span>
@@ -945,6 +1103,18 @@ const GameBoard: React.FC<GameBoardProps> = ({ id, session, emit, gamestate }) =
                   ? toggleRest
                   : undefined
             }
+            attackerSel={combat ? (combat.attackingPlayer === bottom ? combat.attacker : null) : myTurn ? attacker : null}
+            targetSel={combat && defenderIdx === bottom ? combat.target : null}
+            onUnitClick={
+              combat
+                ? iAmDefender && combat.step === "defender"
+                  ? interceptWith
+                  : undefined
+                : canAttack
+                  ? stageAttacker
+                  : undefined
+            }
+            onCommanderClick={!combat && canAttack ? () => stageAttacker("commander") : undefined}
           />
 
           {/* The viewer's table edge: reserve pile (click to open its tray),
@@ -990,8 +1160,20 @@ const GameBoard: React.FC<GameBoardProps> = ({ id, session, emit, gamestate }) =
                       uid={card.uid}
                       spawnFrom="deck:bottom"
                       id={card.id}
-                      selected={mulliganing ? returning.includes(card.uid) : card.uid === playing}
-                      onClick={mulliganing ? () => toggle(card.uid) : myTurn ? () => stageEnergy(card.uid) : undefined}
+                      selected={
+                        mulliganing ? returning.includes(card.uid) : combat ? card.uid === shielding : card.uid === playing
+                      }
+                      onClick={
+                        mulliganing
+                          ? () => toggle(card.uid)
+                          : combat
+                            ? iAmDefender && shieldStep
+                              ? () => setShielding(current => (current === card.uid ? null : card.uid))
+                              : undefined
+                            : myTurn
+                              ? () => stageEnergy(card.uid)
+                              : undefined
+                      }
                     />
                   ))}
                   <HandLabel count={me.hand.length} />

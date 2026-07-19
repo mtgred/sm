@@ -23,7 +23,10 @@ def pool() -> dict[str, Card]:
             mercenary_limit=2,
             core_energy=6,
             hp=10,
+            attack=4,
+            shield_capacity=1,
             conversion_rate="3:1",
+            rules_text="Conjure (💠)",
         ),
         # Evol. 1's cells are unset in Studio: stage lookups fall back to Base
         card(
@@ -43,7 +46,8 @@ def pool() -> dict[str, Card]:
             hp=10,
         ),
         # Units (costs cover the casting tests: 2, free, and unset-in-Studio)
-        card("Common Unit", rarity="Common", cost=2, attack=2, health=2),
+        card("Common Unit", rarity="Common", cost=2, attack=2, health=2,
+             shield_capacity=1, shield_power=1),
         card("Uncommon Unit", rarity="Uncommon", cost=0),
         card("Rare Unit", rarity="Rare"),
         card("Epic Unit", rarity="Epic"),
@@ -54,8 +58,20 @@ def pool() -> dict[str, Card]:
         card("Offfaction Unit", faction="Necromancer", rarity="Common"),
         card("Battle Token", card_type="Token"),
         card("Rage", card_type="Resource"),
+        # One unit per combat keyword (rulebook p. 24), for the combat tests
+        card("Haste Unit", rarity="Common", cost=1, attack=2, health=1, rules_text="Haste"),
+        card("Taunt Unit", rarity="Common", cost=1, attack=1, health=3, rules_text="Taunt"),
+        card("Heavy Unit", rarity="Common", cost=2, attack=1, health=4, rules_text="Heavy"),
+        card("Initiative Unit", rarity="Common", cost=2, attack=2, health=2, rules_text="Initiative"),
+        card("Stealth Unit", rarity="Common", cost=2, attack=2, health=1, rules_text="Stealth"),
+        card("Scout Unit", rarity="Common", cost=2, attack=2, health=2, rules_text="Scout"),
+        card("Intercept Unit", rarity="Common", cost=2, attack=1, health=4, rules_text="Intercept"),
+        card("Riposte Unit", rarity="Common", cost=2, attack=3, health=2, rules_text="Riposte"),
+        card("Armored Unit", rarity="Common", cost=2, attack=1, health=3, rules_text="Armor 2"),
+        card("Piercing Unit", rarity="Common", cost=2, attack=3, health=2, rules_text="Piercing 2"),
+        card("Duelist Unit", rarity="Common", cost=2, attack=2, health=2, rules_text="Duelist"),
         # Non-units
-        card("Common Spell", card_type="Spell", rarity="Common", cost=1),
+        card("Common Spell", card_type="Spell", rarity="Common", cost=1, shield_power=2),
         card("Merc Spell", card_type="Spell", faction="Mercenary", rarity="Common"),
         card("Celestial Spell", card_type="Spell", rarity="Celestial"),
         card(

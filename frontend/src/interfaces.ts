@@ -80,7 +80,21 @@ export interface BoardCard {
 
 export interface CommanderState {
   stages: string[] // card ids in evolution order (Base first)
-  stage: number // index into stages
+  stage: number // index into stages; advances when the commander evolves at 0 HP
+  resting?: boolean // rested by attacking; readies in the owner's upkeep
+}
+
+// A running combat (server/combat.py). Declare and Combat Damage resolve
+// without input, so `step` only takes the four response-window values:
+// preDefender -> defender -> postDefender -> endOfCombat.
+export interface CombatState {
+  step: string
+  attackingPlayer: number // seat index; the defender is the other seat
+  attacker: string // the attacker's battleground uid, or "commander"
+  target: string // the defender's battleground uid, or "commander"
+  attackBonus: number // Duelist's +Atk this combat
+  shields: BoardCard[] // hand cards played as damage shields this instance
+  passed: number[] // seat indexes done with the current step
 }
 
 export interface PlayerState {
@@ -113,10 +127,11 @@ export interface ChatMessage {
 
 export interface GameState {
   round: number
-  phase: string
+  phase: string // "mulligan" | "main" | "combat" | "over"
   firstPlayer: number
   activePlayer: number | null
   winner?: number // player index, set when phase becomes "over"
+  combat?: CombatState // present while phase is "combat"
   log: ChatMessage[]
   players: PlayerState[]
 }

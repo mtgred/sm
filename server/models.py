@@ -159,6 +159,22 @@ class Card(BaseModel):
                 return None
         return None
 
+    def keyword_value(self, keyword: str) -> int | None:
+        """The printed value of a combat keyword (pp. 21-24), or None when
+        the card doesn't have it. Bare keywords ("Haste") count as 1; valued
+        ones carry their N as digits ("Piercing 2") or as resource icons
+        ("Conjure (💠💠)" = 2). Keywords are free text in Studio, so this is
+        a word-boundary scan of the rules text — a card merely *mentioning* a
+        keyword false-positives, which the per-card skills engine (Milestone
+        4) will eventually replace."""
+        match = re.search(rf"\b{keyword}\b ?(\d+)? ?(?:\(([^)]*)\))?", self.rules_text)
+        if not match:
+            return None
+        if match.group(1):
+            return int(match.group(1))
+        icons = (match.group(2) or "").count("💠")
+        return icons or 1
+
     @property
     def is_unit(self) -> bool:
         return self.card_type == CardType.UNIT
